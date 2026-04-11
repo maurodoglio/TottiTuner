@@ -297,7 +297,7 @@ function playNotePreview(freq) {
 }
 
 function isLocalhost(hostname) {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
 }
 
 function getAudioMediaStream() {
@@ -350,7 +350,7 @@ async function startTuner() {
       tunerStatus.textContent = "Use HTTPS (or localhost) to enable microphone";
     } else if (err.name === "NotSupportedError") {
       tunerStatus.textContent = "Microphone is not supported in this browser";
-    } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+    } else if (err.name === "NotFoundError") {
       tunerStatus.textContent = "No microphone device found";
     } else {
       tunerStatus.textContent = "Microphone access denied";
