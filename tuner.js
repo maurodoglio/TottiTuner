@@ -158,6 +158,12 @@ const PREVIEW_DECAY_TIME = 0.45;
 const PREVIEW_DURATION = 0.5;
 const DEFAULT_REACTIVITY = 60;
 const PITCH_HOLD_MS = 280;
+const MIN_SAMPLE_INTERVAL_MS = 130;
+const MAX_SAMPLE_INTERVAL_MS = 25;
+const MIN_SMOOTHING_ALPHA = 0.14;
+const MAX_SMOOTHING_ALPHA = 0.72;
+const MIN_NEEDLE_TRANSITION_MS = 300;
+const MAX_NEEDLE_TRANSITION_MS = 70;
 
 // --- DOM refs ---
 const startBtn = document.getElementById("start-btn");
@@ -221,15 +227,19 @@ function mapRange(value, inMin, inMax, outMin, outMax) {
 }
 
 function getSampleIntervalMs() {
-  return Math.round(mapRange(reactivity, 1, 100, 130, 25));
+  return Math.round(
+    mapRange(reactivity, 1, 100, MIN_SAMPLE_INTERVAL_MS, MAX_SAMPLE_INTERVAL_MS)
+  );
 }
 
 function getSmoothingAlpha() {
-  return mapRange(reactivity, 1, 100, 0.14, 0.72);
+  return mapRange(reactivity, 1, 100, MIN_SMOOTHING_ALPHA, MAX_SMOOTHING_ALPHA);
 }
 
 function applyNeedleSpeed() {
-  const transitionMs = Math.round(mapRange(reactivity, 1, 100, 300, 70));
+  const transitionMs = Math.round(
+    mapRange(reactivity, 1, 100, MIN_NEEDLE_TRANSITION_MS, MAX_NEEDLE_TRANSITION_MS)
+  );
   document.documentElement.style.setProperty("--needle-transition-duration", `${transitionMs}ms`);
 }
 
@@ -285,8 +295,8 @@ function updateTunerUI(frequency) {
 }
 
 function processAudio(timestamp) {
-  if (!lastAnalysisTime) {
-    lastAnalysisTime = timestamp;
+  if (lastAnalysisTime === 0) {
+    lastAnalysisTime = timestamp - getSampleIntervalMs();
   }
 
   if (timestamp - lastAnalysisTime < getSampleIntervalMs()) {
@@ -309,7 +319,7 @@ function processAudio(timestamp) {
     lastStablePitchTime = timestamp;
     updateTunerUI(smoothedFrequency);
   } else {
-    if (lastStablePitchTime && timestamp - lastStablePitchTime > PITCH_HOLD_MS) {
+    if (timestamp - lastStablePitchTime > PITCH_HOLD_MS) {
       smoothedFrequency = null;
       resetDisplay();
     }
@@ -400,7 +410,7 @@ async function startTuner() {
 
     smoothedFrequency = null;
     lastAnalysisTime = 0;
-    lastStablePitchTime = 0;
+    lastStablePitchTime = performance.now();
     isRunning = true;
     startBtn.textContent = "Stop Tuner";
     startBtn.classList.add("active");
