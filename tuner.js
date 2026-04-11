@@ -245,12 +245,12 @@ function processAudio() {
   animFrame = requestAnimationFrame(processAudio);
 }
 
-function isLocalhostHost(hostname) {
+function isLocalhost(hostname) {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
 
 function getAudioMediaStream() {
-  if (!window.isSecureContext && !isLocalhostHost(window.location.hostname)) {
+  if (!window.isSecureContext && !isLocalhost(window.location.hostname)) {
     const err = new Error("Microphone requires HTTPS or localhost");
     err.name = "InsecureContextError";
     throw err;
