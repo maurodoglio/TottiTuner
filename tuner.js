@@ -147,6 +147,7 @@ let mediaStream = null;
 let animFrame = null;
 let isRunning = false;
 let currentInstrument = "guitar";
+let previewAudioContext = null;
 
 const BUFFER_SIZE = 2048;
 
@@ -174,7 +175,18 @@ function updateStringsList() {
   const inst = INSTRUMENTS[currentInstrument];
   inst.strings.forEach(({ note, freq }) => {
     const li = document.createElement("li");
+    li.tabIndex = 0;
+    li.setAttribute("role", "button");
+    li.setAttribute("aria-label", `Play ${note} at ${freq.toFixed(2)} hertz`);
+    li.classList.add("note-button");
     li.innerHTML = `<span class="string-note">${note}</span><span class="string-freq">${freq.toFixed(2)} Hz</span>`;
+    li.addEventListener("click", () => playNotePreview(freq));
+    li.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        playNotePreview(freq);
+      }
+    });
     stringsList.appendChild(li);
   });
 }
@@ -243,6 +255,37 @@ function processAudio() {
   }
 
   animFrame = requestAnimationFrame(processAudio);
+}
+
+function getPreviewAudioContext() {
+  if (!previewAudioContext || previewAudioContext.state === "closed") {
+    previewAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  return previewAudioContext;
+}
+
+function playNotePreview(freq) {
+  const context = isRunning && audioContext ? audioContext : getPreviewAudioContext();
+  if (context.state === "suspended") {
+    context.resume();
+  }
+
+  const oscillator = context.createOscillator();
+  const gainNode = context.createGain();
+  const now = context.currentTime;
+
+  oscillator.type = "sine";
+  oscillator.frequency.setValueAtTime(freq, now);
+
+  gainNode.gain.setValueAtTime(0.0001, now);
+  gainNode.gain.exponentialRampToValueAtTime(0.14, now + 0.02);
+  gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+
+  oscillator.connect(gainNode);
+  gainNode.connect(context.destination);
+
+  oscillator.start(now);
+  oscillator.stop(now + 0.5);
 }
 
 async function startTuner() {
