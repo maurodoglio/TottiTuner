@@ -273,7 +273,7 @@ function getPreviewAudioContext() {
 }
 
 function playNotePreview(freq) {
-  const context = audioContext || getPreviewAudioContext();
+  const context = getPreviewAudioContext();
   if (context.state === "suspended") {
     context.resume();
   }
@@ -327,10 +327,12 @@ function stopTuner() {
   if (animFrame) cancelAnimationFrame(animFrame);
   if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
   if (audioContext) audioContext.close();
+  if (previewAudioContext && previewAudioContext.state !== "closed") previewAudioContext.close();
   animFrame = null;
   analyser = null;
   mediaStream = null;
   audioContext = null;
+  previewAudioContext = null;
   isRunning = false;
   startBtn.textContent = "Start Tuner";
   startBtn.classList.remove("active");
