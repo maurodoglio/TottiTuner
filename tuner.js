@@ -151,6 +151,7 @@ let previewAudioContext = null;
 
 const BUFFER_SIZE = 2048;
 const PREVIEW_ATTACK_GAIN = 0.14;
+// Must be greater than 0 for exponential ramps.
 const PREVIEW_MIN_GAIN = 0.0001;
 const PREVIEW_ATTACK_TIME = 0.02;
 const PREVIEW_DECAY_TIME = 0.45;
@@ -187,7 +188,8 @@ function updateStringsList() {
     li.innerHTML = `<span class="string-note">${note}</span><span class="string-freq">${freq.toFixed(2)} Hz</span>`;
     li.addEventListener("click", () => playNotePreview(freq));
     li.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" && event.key !== " ") {
+      const isActivationKey = event.key === "Enter" || event.key === " ";
+      if (!isActivationKey) {
         return;
       }
       event.preventDefault();
@@ -271,7 +273,7 @@ function getPreviewAudioContext() {
 }
 
 function playNotePreview(freq) {
-  const context = (isRunning && audioContext) ? audioContext : getPreviewAudioContext();
+  const context = audioContext || getPreviewAudioContext();
   if (context.state === "suspended") {
     context.resume();
   }
@@ -325,6 +327,10 @@ function stopTuner() {
   if (animFrame) cancelAnimationFrame(animFrame);
   if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
   if (audioContext) audioContext.close();
+  animFrame = null;
+  analyser = null;
+  mediaStream = null;
+  audioContext = null;
   isRunning = false;
   startBtn.textContent = "Start Tuner";
   startBtn.classList.remove("active");
