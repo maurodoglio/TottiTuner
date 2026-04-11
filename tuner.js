@@ -147,8 +147,15 @@ let mediaStream = null;
 let animFrame = null;
 let isRunning = false;
 let currentInstrument = "guitar";
+let previewAudioContext = null;
 
 const BUFFER_SIZE = 2048;
+const PREVIEW_ATTACK_GAIN = 0.14;
+// Must be greater than 0 for exponential ramps.
+const PREVIEW_MIN_GAIN = 0.0001;
+const PREVIEW_ATTACK_TIME = 0.02;
+const PREVIEW_DECAY_TIME = 0.45;
+const PREVIEW_DURATION = 0.5;
 
 // --- DOM refs ---
 const startBtn = document.getElementById("start-btn");
@@ -174,7 +181,20 @@ function updateStringsList() {
   const inst = INSTRUMENTS[currentInstrument];
   inst.strings.forEach(({ note, freq }) => {
     const li = document.createElement("li");
+    li.tabIndex = 0;
+    li.setAttribute("role", "button");
+    li.setAttribute("aria-label", `Play ${note} at ${freq.toFixed(2)} Hz`);
+    li.classList.add("note-button");
     li.innerHTML = `<span class="string-note">${note}</span><span class="string-freq">${freq.toFixed(2)} Hz</span>`;
+    li.addEventListener("click", () => playNotePreview(freq));
+    li.addEventListener("keydown", (event) => {
+      const isActivationKey = event.key === "Enter" || event.key === " ";
+      if (!isActivationKey) {
+        return;
+      }
+      event.preventDefault();
+      playNotePreview(freq);
+    });
     stringsList.appendChild(li);
   });
 }
@@ -245,8 +265,39 @@ function processAudio() {
   animFrame = requestAnimationFrame(processAudio);
 }
 
+function getPreviewAudioContext() {
+  if (!previewAudioContext || previewAudioContext.state === "closed") {
+    previewAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  return previewAudioContext;
+}
+
+function playNotePreview(freq) {
+  const context = getPreviewAudioContext();
+  if (context.state === "suspended") {
+    context.resume();
+  }
+
+  const oscillator = context.createOscillator();
+  const gainNode = context.createGain();
+  const now = context.currentTime;
+
+  oscillator.type = "sine";
+  oscillator.frequency.setValueAtTime(freq, now);
+
+  gainNode.gain.setValueAtTime(PREVIEW_MIN_GAIN, now);
+  gainNode.gain.exponentialRampToValueAtTime(PREVIEW_ATTACK_GAIN, now + PREVIEW_ATTACK_TIME);
+  gainNode.gain.exponentialRampToValueAtTime(PREVIEW_MIN_GAIN, now + PREVIEW_DECAY_TIME);
+
+  oscillator.connect(gainNode);
+  gainNode.connect(context.destination);
+
+  oscillator.start(now);
+  oscillator.stop(now + PREVIEW_DURATION);
+}
+
 function isLocalhost(hostname) {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
 }
 
 function getAudioMediaStream() {
@@ -299,7 +350,7 @@ async function startTuner() {
       tunerStatus.textContent = "Use HTTPS (or localhost) to enable microphone";
     } else if (err.name === "NotSupportedError") {
       tunerStatus.textContent = "Microphone is not supported in this browser";
-    } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+    } else if (err.name === "NotFoundError") {
       tunerStatus.textContent = "No microphone device found";
     } else {
       tunerStatus.textContent = "Microphone access denied";
@@ -312,7 +363,17 @@ async function startTuner() {
 function stopTuner() {
   if (animFrame) cancelAnimationFrame(animFrame);
   if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
-  if (audioContext) audioContext.close();
+  if (audioContext) {
+    audioContext.close().catch(() => {});
+  }
+  if (previewAudioContext && previewAudioContext.state !== "closed") {
+    previewAudioContext.close().catch(() => {});
+  }
+  animFrame = null;
+  analyser = null;
+  mediaStream = null;
+  audioContext = null;
+  previewAudioContext = null;
   isRunning = false;
   startBtn.textContent = "Start Tuner";
   startBtn.classList.remove("active");
