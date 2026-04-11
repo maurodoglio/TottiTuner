@@ -150,6 +150,11 @@ let currentInstrument = "guitar";
 let previewAudioContext = null;
 
 const BUFFER_SIZE = 2048;
+const PREVIEW_ATTACK_GAIN = 0.14;
+const PREVIEW_MIN_GAIN = 0.0001;
+const PREVIEW_ATTACK_TIME = 0.02;
+const PREVIEW_DECAY_TIME = 0.45;
+const PREVIEW_DURATION = 0.5;
 
 // --- DOM refs ---
 const startBtn = document.getElementById("start-btn");
@@ -177,7 +182,7 @@ function updateStringsList() {
     const li = document.createElement("li");
     li.tabIndex = 0;
     li.setAttribute("role", "button");
-    li.setAttribute("aria-label", `Play ${note} at ${freq.toFixed(2)} hertz`);
+    li.setAttribute("aria-label", `Play ${note} at ${freq.toFixed(2)} Hertz`);
     li.classList.add("note-button");
     li.innerHTML = `<span class="string-note">${note}</span><span class="string-freq">${freq.toFixed(2)} Hz</span>`;
     li.addEventListener("click", () => playNotePreview(freq));
@@ -265,7 +270,7 @@ function getPreviewAudioContext() {
 }
 
 function playNotePreview(freq) {
-  const context = isRunning && audioContext ? audioContext : getPreviewAudioContext();
+  const context = (isRunning && audioContext) ? audioContext : getPreviewAudioContext();
   if (context.state === "suspended") {
     context.resume();
   }
@@ -277,15 +282,15 @@ function playNotePreview(freq) {
   oscillator.type = "sine";
   oscillator.frequency.setValueAtTime(freq, now);
 
-  gainNode.gain.setValueAtTime(0.0001, now);
-  gainNode.gain.exponentialRampToValueAtTime(0.14, now + 0.02);
-  gainNode.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+  gainNode.gain.setValueAtTime(PREVIEW_MIN_GAIN, now);
+  gainNode.gain.exponentialRampToValueAtTime(PREVIEW_ATTACK_GAIN, now + PREVIEW_ATTACK_TIME);
+  gainNode.gain.exponentialRampToValueAtTime(PREVIEW_MIN_GAIN, now + PREVIEW_DECAY_TIME);
 
   oscillator.connect(gainNode);
   gainNode.connect(context.destination);
 
   oscillator.start(now);
-  oscillator.stop(now + 0.5);
+  oscillator.stop(now + PREVIEW_DURATION);
 }
 
 async function startTuner() {
