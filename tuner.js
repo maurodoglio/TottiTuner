@@ -326,8 +326,12 @@ async function startTuner() {
 function stopTuner() {
   if (animFrame) cancelAnimationFrame(animFrame);
   if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
-  if (audioContext) audioContext.close();
-  if (previewAudioContext && previewAudioContext.state !== "closed") previewAudioContext.close();
+  if (audioContext) {
+    audioContext.close().catch(() => {});
+  }
+  if (previewAudioContext && previewAudioContext.state !== "closed") {
+    previewAudioContext.close().catch(() => {});
+  }
   animFrame = null;
   analyser = null;
   mediaStream = null;
