@@ -16,6 +16,7 @@
   --muted: #7a7a9a;
   --radius: 12px;
   --shadow: 0 8px 32px rgba(0,0,0,0.5);
+  --needle-transition-duration: 0.15s;
 }
 
 html, body {
@@ -210,7 +211,35 @@ select:focus { outline: 2px solid var(--accent); }
 /* Needle */
 #needle {
   transform-origin: center bottom;
-  transition: transform 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  transition: transform var(--needle-transition-duration) cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.reactivity-control {
+  margin-top: 0.25rem;
+}
+
+.reactivity-control label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+#reactivity-value {
+  font-weight: 700;
+  color: var(--text);
+}
+
+#reactivity-slider {
+  width: 100%;
+}
+
+.reactivity-hint {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--muted);
 }
 
 /* Labels on gauge */

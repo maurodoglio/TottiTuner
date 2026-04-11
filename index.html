@@ -78,6 +78,22 @@
         </svg>
       </div>
 
+      <div class="reactivity-control" aria-label="Tuner responsiveness control">
+        <label for="reactivity-slider">
+          Reactivity
+          <span id="reactivity-value">60%</span>
+        </label>
+        <input
+          id="reactivity-slider"
+          type="range"
+          min="1"
+          max="100"
+          value="60"
+          aria-describedby="reactivity-hint"
+        />
+        <p id="reactivity-hint" class="reactivity-hint">Lower = smoother, higher = faster response</p>
+      </div>
+
       <div id="tuner-status" class="tuner-status" aria-live="polite">Press Start to begin</div>
     </section>
 

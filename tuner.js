@@ -156,6 +156,8 @@ const PREVIEW_MIN_GAIN = 0.0001;
 const PREVIEW_ATTACK_TIME = 0.02;
 const PREVIEW_DECAY_TIME = 0.45;
 const PREVIEW_DURATION = 0.5;
+const DEFAULT_REACTIVITY = 60;
+const PITCH_HOLD_MS = 280;
 
 // --- DOM refs ---
 const startBtn = document.getElementById("start-btn");
@@ -167,6 +169,13 @@ const needle = document.getElementById("needle");
 const tunerStatus = document.getElementById("tuner-status");
 const stringsList = document.getElementById("strings-list");
 const tunerMeter = document.getElementById("tuner-meter");
+const reactivitySlider = document.getElementById("reactivity-slider");
+const reactivityValue = document.getElementById("reactivity-value");
+
+let reactivity = DEFAULT_REACTIVITY;
+let smoothedFrequency = null;
+let lastAnalysisTime = 0;
+let lastStablePitchTime = 0;
 
 // Populate instrument selector
 Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
@@ -206,6 +215,30 @@ instrumentSelect.addEventListener("change", () => {
 });
 
 updateStringsList();
+
+function mapRange(value, inMin, inMax, outMin, outMax) {
+  return outMin + ((value - inMin) / (inMax - inMin)) * (outMax - outMin);
+}
+
+function getSampleIntervalMs() {
+  return Math.round(mapRange(reactivity, 1, 100, 130, 25));
+}
+
+function getSmoothingAlpha() {
+  return mapRange(reactivity, 1, 100, 0.14, 0.72);
+}
+
+function applyNeedleSpeed() {
+  const transitionMs = Math.round(mapRange(reactivity, 1, 100, 300, 70));
+  document.documentElement.style.setProperty("--needle-transition-duration", `${transitionMs}ms`);
+}
+
+function applyReactivity(value) {
+  const parsed = Number(value);
+  reactivity = Number.isFinite(parsed) ? Math.max(1, Math.min(100, parsed)) : DEFAULT_REACTIVITY;
+  reactivityValue.textContent = `${reactivity}%`;
+  applyNeedleSpeed();
+}
 
 function resetDisplay() {
   noteDisplay.textContent = "--";
@@ -251,15 +284,35 @@ function updateTunerUI(frequency) {
   }
 }
 
-function processAudio() {
+function processAudio(timestamp) {
+  if (!lastAnalysisTime) {
+    lastAnalysisTime = timestamp;
+  }
+
+  if (timestamp - lastAnalysisTime < getSampleIntervalMs()) {
+    animFrame = requestAnimationFrame(processAudio);
+    return;
+  }
+  lastAnalysisTime = timestamp;
+
   const buf = new Float32Array(BUFFER_SIZE);
   analyser.getFloatTimeDomainData(buf);
   const frequency = autoCorrelate(buf, audioContext.sampleRate);
 
   if (frequency !== -1 && frequency > 20 && frequency < 5000) {
-    updateTunerUI(frequency);
+    if (smoothedFrequency === null) {
+      smoothedFrequency = frequency;
+    } else {
+      const alpha = getSmoothingAlpha();
+      smoothedFrequency += (frequency - smoothedFrequency) * alpha;
+    }
+    lastStablePitchTime = timestamp;
+    updateTunerUI(smoothedFrequency);
   } else {
-    resetDisplay();
+    if (lastStablePitchTime && timestamp - lastStablePitchTime > PITCH_HOLD_MS) {
+      smoothedFrequency = null;
+      resetDisplay();
+    }
   }
 
   animFrame = requestAnimationFrame(processAudio);
@@ -271,6 +324,11 @@ function getPreviewAudioContext() {
   }
   return previewAudioContext;
 }
+
+applyReactivity(reactivitySlider.value);
+reactivitySlider.addEventListener("input", (event) => {
+  applyReactivity(event.target.value);
+});
 
 function playNotePreview(freq) {
   const context = getPreviewAudioContext();
@@ -340,6 +398,9 @@ async function startTuner() {
     analyser.fftSize = BUFFER_SIZE;
     source.connect(analyser);
 
+    smoothedFrequency = null;
+    lastAnalysisTime = 0;
+    lastStablePitchTime = 0;
     isRunning = true;
     startBtn.textContent = "Stop Tuner";
     startBtn.classList.add("active");
@@ -373,6 +434,9 @@ function stopTuner() {
   analyser = null;
   mediaStream = null;
   audioContext = null;
+  smoothedFrequency = null;
+  lastAnalysisTime = 0;
+  lastStablePitchTime = 0;
   previewAudioContext = null;
   isRunning = false;
   startBtn.textContent = "Start Tuner";
