@@ -195,11 +195,6 @@ select:focus { outline: 2px solid var(--accent); }
 }
 
 /* Needle */
-.needle-group {
-  transform-origin: 140px 130px;
-  transition: transform 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
-
 #needle {
   transform-origin: center bottom;
   transition: transform 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94);

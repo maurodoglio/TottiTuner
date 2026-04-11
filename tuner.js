@@ -62,7 +62,7 @@ const INSTRUMENTS = {
 const NOTE_STRINGS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
 function noteFromFrequency(frequency) {
-  const noteNum = 12 * (Math.log(frequency / 440) / Math.log(2));
+  const noteNum = 12 * Math.log2(frequency / 440);
   return Math.round(noteNum) + 69;
 }
 
@@ -71,9 +71,7 @@ function frequencyFromNoteNumber(note) {
 }
 
 function centsOffFromPitch(frequency, note) {
-  return Math.floor(
-    (1200 * Math.log(frequency / frequencyFromNoteNumber(note))) / Math.log(2)
-  );
+  return Math.floor(1200 * Math.log2(frequency / frequencyFromNoteNumber(note)));
 }
 
 function noteName(noteNum) {
@@ -200,7 +198,7 @@ function resetDisplay() {
 }
 
 function setNeedle(cents) {
-  // cents: -50 to +50; map to -90deg to +90deg rotation
+  // cents: -50 to +50; map to -85deg to +85deg rotation
   const clamped = Math.max(-50, Math.min(50, cents));
   const deg = (clamped / 50) * 85;
   needle.style.transform = `rotate(${deg}deg)`;
