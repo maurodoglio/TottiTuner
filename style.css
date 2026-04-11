@@ -1,0 +1,270 @@
+/* =========================================================
+   TottiTuner – Styles
+   ========================================================= */
+
+/* Reset & base */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f0f1a;
+  --surface: #1a1a2e;
+  --surface2: #16213e;
+  --accent: #e94560;
+  --green: #00d4a0;
+  --yellow: #f5a623;
+  --text: #e0e0e0;
+  --muted: #7a7a9a;
+  --radius: 12px;
+  --shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5rem 1rem 2rem;
+  gap: 1.5rem;
+}
+
+/* Header */
+header {
+  text-align: center;
+}
+
+header h1 {
+  font-size: 2.4rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, #e94560, #a855f7);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+header p {
+  color: var(--muted);
+  font-size: 0.95rem;
+  margin-top: 0.25rem;
+}
+
+/* Main layout */
+main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  width: 100%;
+  max-width: 600px;
+}
+
+/* Instrument selector card */
+.card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+  width: 100%;
+  box-shadow: var(--shadow);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+.card h2 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-bottom: 0.75rem;
+}
+
+/* Select */
+select {
+  width: 100%;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  padding: 0.65rem 1rem;
+  font-size: 1rem;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237a7a9a' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.9rem center;
+}
+
+select:focus { outline: 2px solid var(--accent); }
+
+/* Strings list */
+.strings-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  list-style: none;
+}
+
+.strings-grid li {
+  background: var(--surface2);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 0.4rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 60px;
+}
+
+.string-note {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.string-freq {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+/* ---- Tuner Meter ---- */
+.tuner-meter {
+  position: relative;
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 1.5rem 1.5rem 1.25rem;
+  width: 100%;
+  box-shadow: var(--shadow);
+  border: 1px solid rgba(255,255,255,0.06);
+  transition: border-color 0.3s;
+  overflow: hidden;
+}
+
+.tuner-meter.in-tune    { border-color: var(--green); }
+.tuner-meter.slightly-off { border-color: var(--yellow); }
+.tuner-meter.out-of-tune  { border-color: var(--accent); }
+
+/* Note + freq + cents readout */
+.readout {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 1.25rem;
+}
+
+#note-display {
+  font-size: 3.5rem;
+  font-weight: 900;
+  line-height: 1;
+  min-width: 80px;
+}
+
+.readout-right {
+  text-align: right;
+}
+
+#freq-display {
+  font-size: 1.1rem;
+  color: var(--muted);
+}
+
+#cents-display {
+  font-size: 1rem;
+  color: var(--muted);
+}
+
+/* Arc gauge */
+.gauge-wrap {
+  position: relative;
+  width: 100%;
+  height: 130px;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+}
+
+.gauge-svg {
+  width: 280px;
+  height: 140px;
+  overflow: visible;
+}
+
+/* Needle */
+#needle {
+  transform-origin: center bottom;
+  transition: transform 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* Labels on gauge */
+.gauge-label {
+  font-size: 11px;
+  fill: var(--muted);
+  font-family: inherit;
+}
+
+/* Status text */
+.tuner-status {
+  text-align: center;
+  margin-top: 0.75rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+  transition: color 0.3s;
+  min-height: 1.6em;
+}
+
+.tuner-status.in-tune     { color: var(--green); }
+.tuner-status.slightly-off { color: var(--yellow); }
+.tuner-status.out-of-tune  { color: var(--accent); }
+
+/* Start button */
+.btn-start {
+  background: linear-gradient(135deg, #e94560, #a855f7);
+  color: #fff;
+  border: none;
+  border-radius: 50px;
+  padding: 0.85rem 2.5rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 20px rgba(233, 69, 96, 0.4);
+  transition: opacity 0.2s, transform 0.1s, box-shadow 0.2s;
+  letter-spacing: 0.02em;
+  width: 100%;
+  max-width: 260px;
+}
+
+.btn-start:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 24px rgba(233, 69, 96, 0.55);
+}
+
+.btn-start:active { transform: translateY(0); }
+
+.btn-start.active {
+  background: linear-gradient(135deg, #333, #555);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+
+/* Footer */
+footer {
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-align: center;
+  margin-top: auto;
+  padding-top: 1rem;
+}
+
+/* Responsive */
+@media (max-width: 420px) {
+  header h1 { font-size: 1.8rem; }
+  #note-display { font-size: 2.5rem; }
+  .gauge-svg { width: 240px; height: 120px; }
+}
