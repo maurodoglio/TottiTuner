@@ -182,15 +182,16 @@ function updateStringsList() {
     const li = document.createElement("li");
     li.tabIndex = 0;
     li.setAttribute("role", "button");
-    li.setAttribute("aria-label", `Play ${note} at ${freq.toFixed(2)} Hertz`);
+    li.setAttribute("aria-label", `Play ${note} at ${freq.toFixed(2)} Hz`);
     li.classList.add("note-button");
     li.innerHTML = `<span class="string-note">${note}</span><span class="string-freq">${freq.toFixed(2)} Hz</span>`;
     li.addEventListener("click", () => playNotePreview(freq));
     li.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        playNotePreview(freq);
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
       }
+      event.preventDefault();
+      playNotePreview(freq);
     });
     stringsList.appendChild(li);
   });
