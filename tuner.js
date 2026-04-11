@@ -245,6 +245,35 @@ function processAudio() {
   animFrame = requestAnimationFrame(processAudio);
 }
 
+function isLocalhostHost(hostname) {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+function getAudioMediaStream() {
+  if (!window.isSecureContext && !isLocalhostHost(window.location.hostname)) {
+    const err = new Error("Microphone requires HTTPS or localhost");
+    err.name = "InsecureContextError";
+    throw err;
+  }
+
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  }
+
+  const legacyGetUserMedia =
+    navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
+
+  if (legacyGetUserMedia) {
+    return new Promise((resolve, reject) => {
+      legacyGetUserMedia.call(navigator, { audio: true, video: false }, resolve, reject);
+    });
+  }
+
+  const err = new Error("getUserMedia is not supported in this browser");
+  err.name = "NotSupportedError";
+  throw err;
+}
+
 async function startTuner() {
   if (isRunning) {
     stopTuner();
@@ -252,7 +281,7 @@ async function startTuner() {
   }
 
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    mediaStream = await getAudioMediaStream();
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
     const source = audioContext.createMediaStreamSource(mediaStream);
 
@@ -266,7 +295,15 @@ async function startTuner() {
     tunerStatus.textContent = "Listening...";
     processAudio();
   } catch (err) {
-    tunerStatus.textContent = "Microphone access denied";
+    if (err.name === "InsecureContextError") {
+      tunerStatus.textContent = "Use HTTPS (or localhost) to enable microphone";
+    } else if (err.name === "NotSupportedError") {
+      tunerStatus.textContent = "Microphone is not supported in this browser";
+    } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+      tunerStatus.textContent = "No microphone device found";
+    } else {
+      tunerStatus.textContent = "Microphone access denied";
+    }
     tunerStatus.className = "tuner-status out-of-tune";
     console.error(err);
   }
