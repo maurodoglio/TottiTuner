@@ -158,12 +158,12 @@ const PREVIEW_DECAY_TIME = 0.45;
 const PREVIEW_DURATION = 0.5;
 const DEFAULT_REACTIVITY = 60;
 const PITCH_HOLD_MS = 280;
-const MIN_SAMPLE_INTERVAL_MS = 130;
-const MAX_SAMPLE_INTERVAL_MS = 25;
+const SLOW_SAMPLE_INTERVAL_MS = 130;
+const FAST_SAMPLE_INTERVAL_MS = 25;
 const MIN_SMOOTHING_ALPHA = 0.14;
 const MAX_SMOOTHING_ALPHA = 0.72;
-const MIN_NEEDLE_TRANSITION_MS = 300;
-const MAX_NEEDLE_TRANSITION_MS = 70;
+const SLOW_NEEDLE_TRANSITION_MS = 300;
+const FAST_NEEDLE_TRANSITION_MS = 70;
 
 // --- DOM refs ---
 const startBtn = document.getElementById("start-btn");
@@ -228,7 +228,7 @@ function mapRange(value, inMin, inMax, outMin, outMax) {
 
 function getSampleIntervalMs() {
   return Math.round(
-    mapRange(reactivity, 1, 100, MIN_SAMPLE_INTERVAL_MS, MAX_SAMPLE_INTERVAL_MS)
+    mapRange(reactivity, 1, 100, SLOW_SAMPLE_INTERVAL_MS, FAST_SAMPLE_INTERVAL_MS)
   );
 }
 
@@ -238,7 +238,7 @@ function getSmoothingAlpha() {
 
 function applyNeedleSpeed() {
   const transitionMs = Math.round(
-    mapRange(reactivity, 1, 100, MIN_NEEDLE_TRANSITION_MS, MAX_NEEDLE_TRANSITION_MS)
+    mapRange(reactivity, 1, 100, SLOW_NEEDLE_TRANSITION_MS, FAST_NEEDLE_TRANSITION_MS)
   );
   document.documentElement.style.setProperty("--needle-transition-duration", `${transitionMs}ms`);
 }
