@@ -81,11 +81,11 @@ function noteName(noteNum) {
 }
 
 // Autocorrelation-based pitch detection
-function autoCorrelate(buf, sampleRate) {
+function autoCorrelate(buf, sampleRate, rmsThreshold) {
   const SIZE = buf.length;
   const rms = Math.sqrt(buf.reduce((sum, v) => sum + v * v, 0) / SIZE);
 
-  if (rms < 0.01) return -1; // Signal too quiet
+  if (rms < rmsThreshold) return -1; // Signal too quiet
 
   // Trim edges with signal
   let r1 = 0,
@@ -156,6 +156,23 @@ const PREVIEW_MIN_GAIN = 0.0001;
 const PREVIEW_ATTACK_TIME = 0.02;
 const PREVIEW_DECAY_TIME = 0.45;
 const PREVIEW_DURATION = 0.5;
+const DEFAULT_NOISE_GATE = 50;
+const DEFAULT_REACTIVITY = 60;
+const DEFAULT_MODE = "balanced";
+const PITCH_HOLD_MS = 280;
+const MAX_SAMPLE_INTERVAL_MS = 130;
+const MIN_SAMPLE_INTERVAL_MS = 25;
+const MIN_RMS_THRESHOLD = 0.004;
+const MAX_RMS_THRESHOLD = 0.03;
+const MIN_SMOOTHING_ALPHA = 0.14;
+const MAX_SMOOTHING_ALPHA = 0.72;
+const MAX_NEEDLE_TRANSITION_MS = 300;
+const MIN_NEEDLE_TRANSITION_MS = 70;
+const MODE_PRESETS = {
+  performance: { reactivity: 85, noiseGate: 35 },
+  balanced: { reactivity: DEFAULT_REACTIVITY, noiseGate: DEFAULT_NOISE_GATE },
+  precision: { reactivity: 35, noiseGate: 70 },
+};
 
 // --- DOM refs ---
 const startBtn = document.getElementById("start-btn");
@@ -167,6 +184,18 @@ const needle = document.getElementById("needle");
 const tunerStatus = document.getElementById("tuner-status");
 const stringsList = document.getElementById("strings-list");
 const tunerMeter = document.getElementById("tuner-meter");
+const modeSelect = document.getElementById("mode-select");
+const noiseGateSlider = document.getElementById("noise-gate-slider");
+const noiseGateValue = document.getElementById("noise-gate-value");
+const reactivitySlider = document.getElementById("reactivity-slider");
+const reactivityValue = document.getElementById("reactivity-value");
+
+let mode = DEFAULT_MODE;
+let noiseGate = DEFAULT_NOISE_GATE;
+let reactivity = DEFAULT_REACTIVITY;
+let smoothedFrequency = null;
+let lastAnalysisTime = 0;
+let lastStablePitchTime = 0;
 
 // Populate instrument selector
 Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
@@ -206,6 +235,59 @@ instrumentSelect.addEventListener("change", () => {
 });
 
 updateStringsList();
+
+function mapRange(value, inMin, inMax, outMin, outMax) {
+  return outMin + ((value - inMin) / (inMax - inMin)) * (outMax - outMin);
+}
+
+function getSampleIntervalMs() {
+  return Math.round(
+    mapRange(reactivity, 1, 100, MAX_SAMPLE_INTERVAL_MS, MIN_SAMPLE_INTERVAL_MS)
+  );
+}
+
+function getRmsThreshold() {
+  return mapRange(noiseGate, 1, 100, MIN_RMS_THRESHOLD, MAX_RMS_THRESHOLD);
+}
+
+function getSmoothingAlpha() {
+  return mapRange(reactivity, 1, 100, MIN_SMOOTHING_ALPHA, MAX_SMOOTHING_ALPHA);
+}
+
+function applyNeedleSpeed() {
+  const transitionMs = Math.round(
+    mapRange(reactivity, 1, 100, MAX_NEEDLE_TRANSITION_MS, MIN_NEEDLE_TRANSITION_MS)
+  );
+  document.documentElement.style.setProperty("--needle-transition-duration", `${transitionMs}ms`);
+}
+
+function applyReactivity(value) {
+  const parsed = Number(value);
+  reactivity = Number.isFinite(parsed) ? Math.max(1, Math.min(100, parsed)) : DEFAULT_REACTIVITY;
+  reactivitySlider.value = String(reactivity);
+  reactivityValue.textContent = `${reactivity}%`;
+  applyNeedleSpeed();
+}
+
+function applyNoiseGate(value) {
+  const parsed = Number(value);
+  noiseGate = Number.isFinite(parsed) ? Math.max(1, Math.min(100, parsed)) : DEFAULT_NOISE_GATE;
+  noiseGateSlider.value = String(noiseGate);
+  noiseGateValue.textContent = `${noiseGate}%`;
+}
+
+function applyMode(value) {
+  if (value === "custom") {
+    mode = "custom";
+    modeSelect.value = "custom";
+    return;
+  }
+  const preset = MODE_PRESETS[value] || MODE_PRESETS[DEFAULT_MODE];
+  mode = MODE_PRESETS[value] ? value : DEFAULT_MODE;
+  modeSelect.value = mode;
+  applyReactivity(preset.reactivity);
+  applyNoiseGate(preset.noiseGate);
+}
 
 function resetDisplay() {
   noteDisplay.textContent = "--";
@@ -251,15 +333,31 @@ function updateTunerUI(frequency) {
   }
 }
 
-function processAudio() {
+function processAudio(timestamp) {
+  if (timestamp - lastAnalysisTime < getSampleIntervalMs()) {
+    animFrame = requestAnimationFrame(processAudio);
+    return;
+  }
+  lastAnalysisTime = timestamp;
+
   const buf = new Float32Array(BUFFER_SIZE);
   analyser.getFloatTimeDomainData(buf);
-  const frequency = autoCorrelate(buf, audioContext.sampleRate);
+  const frequency = autoCorrelate(buf, audioContext.sampleRate, getRmsThreshold());
 
   if (frequency !== -1 && frequency > 20 && frequency < 5000) {
-    updateTunerUI(frequency);
+    if (smoothedFrequency === null) {
+      smoothedFrequency = frequency;
+    } else {
+      const alpha = getSmoothingAlpha();
+      smoothedFrequency += (frequency - smoothedFrequency) * alpha;
+    }
+    lastStablePitchTime = timestamp;
+    updateTunerUI(smoothedFrequency);
   } else {
-    resetDisplay();
+    if (timestamp - lastStablePitchTime > PITCH_HOLD_MS) {
+      smoothedFrequency = null;
+      resetDisplay();
+    }
   }
 
   animFrame = requestAnimationFrame(processAudio);
@@ -271,6 +369,23 @@ function getPreviewAudioContext() {
   }
   return previewAudioContext;
 }
+
+applyMode(DEFAULT_MODE);
+modeSelect.addEventListener("change", (event) => {
+  applyMode(event.target.value);
+});
+
+applyNoiseGate(noiseGateSlider.value);
+noiseGateSlider.addEventListener("input", (event) => {
+  applyNoiseGate(event.target.value);
+  applyMode("custom");
+});
+
+applyReactivity(reactivitySlider.value);
+reactivitySlider.addEventListener("input", (event) => {
+  applyReactivity(event.target.value);
+  applyMode("custom");
+});
 
 function playNotePreview(freq) {
   const context = getPreviewAudioContext();
@@ -340,6 +455,9 @@ async function startTuner() {
     analyser.fftSize = BUFFER_SIZE;
     source.connect(analyser);
 
+    smoothedFrequency = null;
+    lastAnalysisTime = performance.now() - getSampleIntervalMs();
+    lastStablePitchTime = performance.now();
     isRunning = true;
     startBtn.textContent = "Stop Tuner";
     startBtn.classList.add("active");
@@ -373,6 +491,9 @@ function stopTuner() {
   analyser = null;
   mediaStream = null;
   audioContext = null;
+  smoothedFrequency = null;
+  lastAnalysisTime = 0;
+  lastStablePitchTime = 0;
   previewAudioContext = null;
   isRunning = false;
   startBtn.textContent = "Start Tuner";

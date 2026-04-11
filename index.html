@@ -78,6 +78,52 @@
         </svg>
       </div>
 
+      <div class="tuner-controls">
+        <div class="mode-control">
+          <label for="mode-select">Response Mode</label>
+          <select id="mode-select" aria-label="Tuner response mode">
+            <option value="performance">Performance</option>
+            <option value="balanced" selected>Balanced</option>
+            <option value="precision">Precision</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+
+        <div class="noise-gate-control">
+          <label for="noise-gate-slider">
+            Noise Gate
+            <span id="noise-gate-value">50%</span>
+          </label>
+          <input
+            id="noise-gate-slider"
+            type="range"
+            min="1"
+            max="100"
+            value="50"
+            aria-label="Noise gate sensitivity"
+            aria-describedby="noise-gate-hint"
+          />
+          <p id="noise-gate-hint" class="reactivity-hint">Higher values ignore more background noise before locking pitch.</p>
+        </div>
+
+        <div class="reactivity-control">
+        <label for="reactivity-slider">
+          Reactivity
+          <span id="reactivity-value">60%</span>
+        </label>
+        <input
+          id="reactivity-slider"
+          type="range"
+          min="1"
+          max="100"
+          value="60"
+          aria-label="Tuner responsiveness"
+          aria-describedby="reactivity-hint"
+        />
+        <p id="reactivity-hint" class="reactivity-hint">Lower values provide smoother, steadier readings. Higher values respond faster to pitch changes.</p>
+      </div>
+      </div>
+
       <div id="tuner-status" class="tuner-status" aria-live="polite">Press Start to begin</div>
     </section>
 
