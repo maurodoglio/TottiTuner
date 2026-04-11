@@ -218,6 +218,23 @@ select:focus { outline: 2px solid var(--accent); }
   margin-top: 0.25rem;
 }
 
+.tuner-controls {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.mode-control label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.mode-control select {
+  width: 100%;
+}
+
+.noise-gate-control label,
 .reactivity-control label {
   display: flex;
   justify-content: space-between;
@@ -227,11 +244,13 @@ select:focus { outline: 2px solid var(--accent); }
   margin-bottom: 0.35rem;
 }
 
+#noise-gate-value,
 #reactivity-value {
   font-weight: 700;
   color: var(--text);
 }
 
+#noise-gate-slider,
 #reactivity-slider {
   width: 100%;
 }
