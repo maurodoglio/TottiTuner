@@ -8,12 +8,14 @@ import { autoCorrelate, getAudioMediaStream } from "./audio.js";
 
 // --- Constants ---
 const BUFFER_SIZE = 2048;
-const PREVIEW_ATTACK_GAIN = 0.14;
+const PREVIEW_PEAK_GAIN = 0.14;
 // Must be greater than 0 for exponential ramps.
 const PREVIEW_MIN_GAIN = 0.0001;
 const PREVIEW_ATTACK_TIME = 0.02;
-const PREVIEW_DECAY_TIME = 0.45;
-const PREVIEW_DURATION = 0.5;
+const PREVIEW_SUSTAIN_TIME = 1.0;
+const PREVIEW_RELEASE_TIME = 0.4;
+// Short fade when interrupting a preview mid-playback, to avoid clicks.
+const PREVIEW_STOP_FADE_TIME = 0.02;
 const DEFAULT_NOISE_GATE = 50;
 const DEFAULT_REACTIVITY = 60;
 const DEFAULT_MODE = "balanced";
@@ -47,6 +49,7 @@ let mediaStream = null;
 let animFrame = null;
 let isRunning = false;
 let previewAudioContext = null;
+let activePreview = null; // { oscillator, gainNode }
 let smoothedFrequency = null;
 let lastAnalysisTime = 0;
 let lastStablePitchTime = 0;
@@ -269,26 +272,52 @@ function getPreviewAudioContext() {
   return previewAudioContext;
 }
 
+function stopActivePreview() {
+  if (!activePreview) return;
+  const { oscillator, gainNode } = activePreview;
+  const now = previewAudioContext.currentTime;
+  gainNode.gain.cancelScheduledValues(now);
+  gainNode.gain.setValueAtTime(gainNode.gain.value, now);
+  gainNode.gain.linearRampToValueAtTime(0, now + PREVIEW_STOP_FADE_TIME);
+  try { oscillator.stop(now + PREVIEW_STOP_FADE_TIME); } catch (_) {}
+  activePreview = null;
+}
+
 function playNotePreview(freq) {
   const context = getPreviewAudioContext();
   if (context.state === "suspended") context.resume();
 
+  stopActivePreview();
+
+  const { harmonics } = INSTRUMENTS[currentInstrument];
+  const real = new Float32Array(harmonics);
+  const imag = new Float32Array(harmonics.length);
+  const wave = context.createPeriodicWave(real, imag);
+
   const oscillator = context.createOscillator();
   const gainNode = context.createGain();
   const now = context.currentTime;
+  const releaseStart = now + PREVIEW_ATTACK_TIME + PREVIEW_SUSTAIN_TIME;
+  const endTime = releaseStart + PREVIEW_RELEASE_TIME;
 
-  oscillator.type = "sine";
+  oscillator.setPeriodicWave(wave);
   oscillator.frequency.setValueAtTime(freq, now);
 
   gainNode.gain.setValueAtTime(PREVIEW_MIN_GAIN, now);
-  gainNode.gain.exponentialRampToValueAtTime(PREVIEW_ATTACK_GAIN, now + PREVIEW_ATTACK_TIME);
-  gainNode.gain.exponentialRampToValueAtTime(PREVIEW_MIN_GAIN, now + PREVIEW_DECAY_TIME);
+  gainNode.gain.exponentialRampToValueAtTime(PREVIEW_PEAK_GAIN, now + PREVIEW_ATTACK_TIME);
+  gainNode.gain.setValueAtTime(PREVIEW_PEAK_GAIN, releaseStart);
+  gainNode.gain.exponentialRampToValueAtTime(PREVIEW_MIN_GAIN, endTime);
 
   oscillator.connect(gainNode);
   gainNode.connect(context.destination);
 
   oscillator.start(now);
-  oscillator.stop(now + PREVIEW_DURATION);
+  oscillator.stop(endTime);
+
+  activePreview = { oscillator, gainNode };
+  oscillator.onended = () => {
+    if (activePreview && activePreview.oscillator === oscillator) activePreview = null;
+  };
 }
 
 async function startTuner() {
@@ -334,6 +363,7 @@ function stopTuner() {
   if (animFrame) cancelAnimationFrame(animFrame);
   if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
   if (audioContext) audioContext.close().catch(() => {});
+  stopActivePreview();
   if (previewAudioContext && previewAudioContext.state !== "closed") {
     previewAudioContext.close().catch(() => {});
   }
