@@ -122,6 +122,19 @@
         />
         <p id="reactivity-hint" class="reactivity-hint">Lower values provide smoother, steadier readings. Higher values respond faster to pitch changes.</p>
       </div>
+
+        <div class="ref-pitch-control">
+          <label for="ref-pitch-select">Reference Pitch (A4)</label>
+          <select id="ref-pitch-select" aria-label="Reference pitch for A4">
+            <option value="432">432 Hz</option>
+            <option value="438">438 Hz</option>
+            <option value="440" selected>440 Hz (standard)</option>
+            <option value="441">441 Hz</option>
+            <option value="442">442 Hz</option>
+            <option value="443">443 Hz</option>
+            <option value="444">444 Hz</option>
+          </select>
+        </div>
       </div>
 
       <div id="tuner-status" class="tuner-status" aria-live="polite">Press Start to begin</div>
@@ -136,6 +149,6 @@
     <p>Uses your microphone to detect pitch in real time</p>
   </footer>
 
-  <script src="tuner.js"></script>
+  <script type="module" src="tuner.js"></script>
 </body>
 </html>

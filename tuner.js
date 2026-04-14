@@ -1,154 +1,12 @@
-// Instrument definitions: name -> array of { note, freq }
-const INSTRUMENTS = {
-  guitar: {
-    label: "Guitar",
-    strings: [
-      { note: "E2", freq: 82.41 },
-      { note: "A2", freq: 110.0 },
-      { note: "D3", freq: 146.83 },
-      { note: "G3", freq: 196.0 },
-      { note: "B3", freq: 246.94 },
-      { note: "E4", freq: 329.63 },
-    ],
-  },
-  bass: {
-    label: "Bass Guitar",
-    strings: [
-      { note: "E1", freq: 41.2 },
-      { note: "A1", freq: 55.0 },
-      { note: "D2", freq: 73.42 },
-      { note: "G2", freq: 98.0 },
-    ],
-  },
-  ukulele: {
-    label: "Ukulele",
-    strings: [
-      { note: "G4", freq: 392.0 },
-      { note: "C4", freq: 261.63 },
-      { note: "E4", freq: 329.63 },
-      { note: "A4", freq: 440.0 },
-    ],
-  },
-  violin: {
-    label: "Violin",
-    strings: [
-      { note: "G3", freq: 196.0 },
-      { note: "D4", freq: 293.66 },
-      { note: "A4", freq: 440.0 },
-      { note: "E5", freq: 659.25 },
-    ],
-  },
-  cello: {
-    label: "Cello",
-    strings: [
-      { note: "C2", freq: 65.41 },
-      { note: "G2", freq: 98.0 },
-      { note: "D3", freq: 146.83 },
-      { note: "A3", freq: 220.0 },
-    ],
-  },
-  mandolin: {
-    label: "Mandolin",
-    strings: [
-      { note: "G3", freq: 196.0 },
-      { note: "D4", freq: 293.66 },
-      { note: "A4", freq: 440.0 },
-      { note: "E5", freq: 659.25 },
-    ],
-  },
-};
+import {
+  INSTRUMENTS,
+  noteFromFrequency,
+  centsOffFromPitch,
+  noteName,
+} from "./instruments.js";
+import { autoCorrelate, getAudioMediaStream } from "./audio.js";
 
-// All notes with their frequencies for nearest-note lookup
-const NOTE_STRINGS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-
-function noteFromFrequency(frequency) {
-  const noteNum = 12 * Math.log2(frequency / 440);
-  return Math.round(noteNum) + 69;
-}
-
-function frequencyFromNoteNumber(note) {
-  return 440 * Math.pow(2, (note - 69) / 12);
-}
-
-function centsOffFromPitch(frequency, note) {
-  return Math.floor(1200 * Math.log2(frequency / frequencyFromNoteNumber(note)));
-}
-
-function noteName(noteNum) {
-  const octave = Math.floor(noteNum / 12) - 1;
-  const name = NOTE_STRINGS[noteNum % 12];
-  return `${name}${octave}`;
-}
-
-// Autocorrelation-based pitch detection
-function autoCorrelate(buf, sampleRate, rmsThreshold) {
-  const SIZE = buf.length;
-  const rms = Math.sqrt(buf.reduce((sum, v) => sum + v * v, 0) / SIZE);
-
-  if (rms < rmsThreshold) return -1; // Signal too quiet
-
-  // Trim edges with signal
-  let r1 = 0,
-    r2 = SIZE - 1;
-  const thres = 0.2;
-  for (let i = 0; i < SIZE / 2; i++) {
-    if (Math.abs(buf[i]) < thres) {
-      r1 = i;
-      break;
-    }
-  }
-  for (let i = 1; i < SIZE / 2; i++) {
-    if (Math.abs(buf[SIZE - i]) < thres) {
-      r2 = SIZE - i;
-      break;
-    }
-  }
-
-  const trimmed = buf.slice(r1, r2);
-  const c = new Array(trimmed.length).fill(0);
-
-  for (let i = 0; i < trimmed.length; i++) {
-    for (let j = 0; j < trimmed.length - i; j++) {
-      c[i] += trimmed[j] * trimmed[j + i];
-    }
-  }
-
-  // Find first valley then first peak after it
-  let d = 0;
-  while (c[d] > c[d + 1]) d++;
-
-  let maxVal = -1,
-    maxPos = -1;
-  for (let i = d; i < trimmed.length; i++) {
-    if (c[i] > maxVal) {
-      maxVal = c[i];
-      maxPos = i;
-    }
-  }
-
-  if (maxPos === -1) return -1;
-
-  // Interpolate around the peak for better accuracy
-  let T0 = maxPos;
-  const x1 = c[T0 - 1];
-  const x2 = c[T0];
-  const x3 = c[T0 + 1];
-  const a = (x1 + x3 - 2 * x2) / 2;
-  const b = (x3 - x1) / 2;
-  if (a) T0 = T0 - b / (2 * a);
-
-  return sampleRate / T0;
-}
-
-// --- UI State ---
-let audioContext = null;
-let analyser = null;
-let mediaStream = null;
-let animFrame = null;
-let isRunning = false;
-let currentInstrument = "guitar";
-let previewAudioContext = null;
-
+// --- Constants ---
 const BUFFER_SIZE = 2048;
 const PREVIEW_ATTACK_GAIN = 0.14;
 // Must be greater than 0 for exponential ramps.
@@ -159,6 +17,7 @@ const PREVIEW_DURATION = 0.5;
 const DEFAULT_NOISE_GATE = 50;
 const DEFAULT_REACTIVITY = 60;
 const DEFAULT_MODE = "balanced";
+const DEFAULT_REFERENCE_PITCH = 440;
 const PITCH_HOLD_MS = 280;
 const MAX_SAMPLE_INTERVAL_MS = 130;
 const MIN_SAMPLE_INTERVAL_MS = 25;
@@ -173,6 +32,31 @@ const MODE_PRESETS = {
   balanced: { reactivity: DEFAULT_REACTIVITY, noiseGate: DEFAULT_NOISE_GATE },
   precision: { reactivity: 35, noiseGate: 70 },
 };
+const STORAGE_KEYS = {
+  instrument: "tottiTuner_instrument",
+  mode: "tottiTuner_mode",
+  reactivity: "tottiTuner_reactivity",
+  noiseGate: "tottiTuner_noiseGate",
+  referencePitch: "tottiTuner_referencePitch",
+};
+
+// --- Audio state ---
+let audioContext = null;
+let analyser = null;
+let mediaStream = null;
+let animFrame = null;
+let isRunning = false;
+let previewAudioContext = null;
+let smoothedFrequency = null;
+let lastAnalysisTime = 0;
+let lastStablePitchTime = 0;
+
+// --- UI state ---
+let currentInstrument = localStorage.getItem(STORAGE_KEYS.instrument) || "guitar";
+let mode = DEFAULT_MODE;
+let noiseGate = DEFAULT_NOISE_GATE;
+let reactivity = DEFAULT_REACTIVITY;
+let referencePitch = DEFAULT_REFERENCE_PITCH;
 
 // --- DOM refs ---
 const startBtn = document.getElementById("start-btn");
@@ -189,40 +73,39 @@ const noiseGateSlider = document.getElementById("noise-gate-slider");
 const noiseGateValue = document.getElementById("noise-gate-value");
 const reactivitySlider = document.getElementById("reactivity-slider");
 const reactivityValue = document.getElementById("reactivity-value");
+const refPitchSelect = document.getElementById("ref-pitch-select");
 
-let mode = DEFAULT_MODE;
-let noiseGate = DEFAULT_NOISE_GATE;
-let reactivity = DEFAULT_REACTIVITY;
-let smoothedFrequency = null;
-let lastAnalysisTime = 0;
-let lastStablePitchTime = 0;
-
-// Populate instrument selector
+// Populate instrument selector, restoring saved selection
 Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
   const opt = document.createElement("option");
   opt.value = key;
   opt.textContent = inst.label;
+  if (key === currentInstrument) opt.selected = true;
   instrumentSelect.appendChild(opt);
 });
 
+// INSTRUMENTS frequencies are defined at A4=440. Scale proportionally for other reference pitches.
+function scaledFreq(baseFreq) {
+  return baseFreq * (referencePitch / 440);
+}
+
 function updateStringsList() {
   stringsList.innerHTML = "";
-  const inst = INSTRUMENTS[currentInstrument];
-  inst.strings.forEach(({ note, freq }) => {
+  INSTRUMENTS[currentInstrument].strings.forEach(({ note, freq }) => {
+    const adjustedFreq = scaledFreq(freq);
     const li = document.createElement("li");
     li.tabIndex = 0;
     li.setAttribute("role", "button");
-    li.setAttribute("aria-label", `Play ${note} at ${freq.toFixed(2)} Hz`);
+    li.setAttribute("aria-label", `Play ${note} at ${adjustedFreq.toFixed(2)} Hz`);
     li.classList.add("note-button");
-    li.innerHTML = `<span class="string-note">${note}</span><span class="string-freq">${freq.toFixed(2)} Hz</span>`;
-    li.addEventListener("click", () => playNotePreview(freq));
+    // Store MIDI note number for active-string highlighting comparison
+    li.dataset.midi = String(noteFromFrequency(adjustedFreq, referencePitch));
+    li.innerHTML = `<span class="string-note">${note}</span><span class="string-freq">${adjustedFreq.toFixed(2)} Hz</span>`;
+    li.addEventListener("click", () => playNotePreview(adjustedFreq));
     li.addEventListener("keydown", (event) => {
-      const isActivationKey = event.key === "Enter" || event.key === " ";
-      if (!isActivationKey) {
-        return;
-      }
+      if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
-      playNotePreview(freq);
+      playNotePreview(adjustedFreq);
     });
     stringsList.appendChild(li);
   });
@@ -230,20 +113,17 @@ function updateStringsList() {
 
 instrumentSelect.addEventListener("change", () => {
   currentInstrument = instrumentSelect.value;
+  localStorage.setItem(STORAGE_KEYS.instrument, currentInstrument);
   updateStringsList();
   resetDisplay();
 });
-
-updateStringsList();
 
 function mapRange(value, inMin, inMax, outMin, outMax) {
   return outMin + ((value - inMin) / (inMax - inMin)) * (outMax - outMin);
 }
 
 function getSampleIntervalMs() {
-  return Math.round(
-    mapRange(reactivity, 1, 100, MAX_SAMPLE_INTERVAL_MS, MIN_SAMPLE_INTERVAL_MS)
-  );
+  return Math.round(mapRange(reactivity, 1, 100, MAX_SAMPLE_INTERVAL_MS, MIN_SAMPLE_INTERVAL_MS));
 }
 
 function getRmsThreshold() {
@@ -289,11 +169,25 @@ function applyMode(value) {
   applyNoiseGate(preset.noiseGate);
 }
 
+function applyReferencePitch(value) {
+  const parsed = Number(value);
+  referencePitch = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REFERENCE_PITCH;
+  const available = Array.from(refPitchSelect.options).map(o => Number(o.value));
+  refPitchSelect.value = available.includes(referencePitch)
+    ? String(referencePitch)
+    : String(DEFAULT_REFERENCE_PITCH);
+}
+
+function clearActiveStrings() {
+  stringsList.querySelectorAll(".note-button.active").forEach(el => el.classList.remove("active"));
+}
+
 function resetDisplay() {
   noteDisplay.textContent = "--";
   freqDisplay.textContent = "-- Hz";
   centsDisplay.textContent = "0¢";
   setNeedle(0);
+  clearActiveStrings();
   tunerStatus.textContent = "Waiting for sound...";
   tunerStatus.className = "tuner-status";
   tunerMeter.className = "tuner-meter";
@@ -306,9 +200,16 @@ function setNeedle(cents) {
   needle.style.transform = `rotate(${deg}deg)`;
 }
 
+function highlightActiveString(noteNum, cents) {
+  const midiStr = String(noteNum);
+  stringsList.querySelectorAll(".note-button").forEach(li => {
+    li.classList.toggle("active", li.dataset.midi === midiStr && Math.abs(cents) <= 15);
+  });
+}
+
 function updateTunerUI(frequency) {
-  const noteNum = noteFromFrequency(frequency);
-  const cents = centsOffFromPitch(frequency, noteNum);
+  const noteNum = noteFromFrequency(frequency, referencePitch);
+  const cents = centsOffFromPitch(frequency, noteNum, referencePitch);
   const name = noteName(noteNum);
 
   noteDisplay.textContent = name;
@@ -316,6 +217,7 @@ function updateTunerUI(frequency) {
   centsDisplay.textContent = `${cents >= 0 ? "+" : ""}${cents}¢`;
 
   setNeedle(cents);
+  highlightActiveString(noteNum, cents);
 
   const absCents = Math.abs(cents);
   if (absCents <= 5) {
@@ -348,16 +250,13 @@ function processAudio(timestamp) {
     if (smoothedFrequency === null) {
       smoothedFrequency = frequency;
     } else {
-      const alpha = getSmoothingAlpha();
-      smoothedFrequency += (frequency - smoothedFrequency) * alpha;
+      smoothedFrequency += (frequency - smoothedFrequency) * getSmoothingAlpha();
     }
     lastStablePitchTime = timestamp;
     updateTunerUI(smoothedFrequency);
-  } else {
-    if (timestamp - lastStablePitchTime > PITCH_HOLD_MS) {
-      smoothedFrequency = null;
-      resetDisplay();
-    }
+  } else if (timestamp - lastStablePitchTime > PITCH_HOLD_MS) {
+    smoothedFrequency = null;
+    resetDisplay();
   }
 
   animFrame = requestAnimationFrame(processAudio);
@@ -370,28 +269,9 @@ function getPreviewAudioContext() {
   return previewAudioContext;
 }
 
-applyMode(DEFAULT_MODE);
-modeSelect.addEventListener("change", (event) => {
-  applyMode(event.target.value);
-});
-
-applyNoiseGate(noiseGateSlider.value);
-noiseGateSlider.addEventListener("input", (event) => {
-  applyNoiseGate(event.target.value);
-  applyMode("custom");
-});
-
-applyReactivity(reactivitySlider.value);
-reactivitySlider.addEventListener("input", (event) => {
-  applyReactivity(event.target.value);
-  applyMode("custom");
-});
-
 function playNotePreview(freq) {
   const context = getPreviewAudioContext();
-  if (context.state === "suspended") {
-    context.resume();
-  }
+  if (context.state === "suspended") context.resume();
 
   const oscillator = context.createOscillator();
   const gainNode = context.createGain();
@@ -409,35 +289,6 @@ function playNotePreview(freq) {
 
   oscillator.start(now);
   oscillator.stop(now + PREVIEW_DURATION);
-}
-
-function isLocalhost(hostname) {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-}
-
-function getAudioMediaStream() {
-  if (!window.isSecureContext && !isLocalhost(window.location.hostname)) {
-    const err = new Error("Microphone requires HTTPS or localhost");
-    err.name = "InsecureContextError";
-    throw err;
-  }
-
-  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-    return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-  }
-
-  const legacyGetUserMedia =
-    navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
-
-  if (legacyGetUserMedia) {
-    return new Promise((resolve, reject) => {
-      legacyGetUserMedia.call(navigator, { audio: true, video: false }, resolve, reject);
-    });
-  }
-
-  const err = new Error("getUserMedia is not supported in this browser");
-  err.name = "NotSupportedError";
-  throw err;
 }
 
 async function startTuner() {
@@ -461,6 +312,7 @@ async function startTuner() {
     isRunning = true;
     startBtn.textContent = "Stop Tuner";
     startBtn.classList.add("active");
+    startBtn.setAttribute("aria-pressed", "true");
     tunerStatus.textContent = "Listening...";
     processAudio();
   } catch (err) {
@@ -481,9 +333,7 @@ async function startTuner() {
 function stopTuner() {
   if (animFrame) cancelAnimationFrame(animFrame);
   if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
-  if (audioContext) {
-    audioContext.close().catch(() => {});
-  }
+  if (audioContext) audioContext.close().catch(() => {});
   if (previewAudioContext && previewAudioContext.state !== "closed") {
     previewAudioContext.close().catch(() => {});
   }
@@ -498,7 +348,58 @@ function stopTuner() {
   isRunning = false;
   startBtn.textContent = "Start Tuner";
   startBtn.classList.remove("active");
+  startBtn.setAttribute("aria-pressed", "false");
   resetDisplay();
 }
 
+// --- Event listeners ---
 startBtn.addEventListener("click", startTuner);
+
+modeSelect.addEventListener("change", (event) => {
+  applyMode(event.target.value);
+  localStorage.setItem(STORAGE_KEYS.mode, mode);
+  if (mode !== "custom") {
+    localStorage.setItem(STORAGE_KEYS.reactivity, String(reactivity));
+    localStorage.setItem(STORAGE_KEYS.noiseGate, String(noiseGate));
+  }
+});
+
+noiseGateSlider.addEventListener("input", (event) => {
+  applyNoiseGate(event.target.value);
+  applyMode("custom");
+  localStorage.setItem(STORAGE_KEYS.noiseGate, String(noiseGate));
+  localStorage.setItem(STORAGE_KEYS.mode, "custom");
+});
+
+reactivitySlider.addEventListener("input", (event) => {
+  applyReactivity(event.target.value);
+  applyMode("custom");
+  localStorage.setItem(STORAGE_KEYS.reactivity, String(reactivity));
+  localStorage.setItem(STORAGE_KEYS.mode, "custom");
+});
+
+refPitchSelect.addEventListener("change", (event) => {
+  referencePitch = Number(event.target.value);
+  localStorage.setItem(STORAGE_KEYS.referencePitch, String(referencePitch));
+  updateStringsList();
+  if (isRunning) resetDisplay();
+});
+
+// --- Initialize from localStorage ---
+(function init() {
+  const savedMode = localStorage.getItem(STORAGE_KEYS.mode) || DEFAULT_MODE;
+  const savedReactivity = localStorage.getItem(STORAGE_KEYS.reactivity);
+  const savedNoiseGate = localStorage.getItem(STORAGE_KEYS.noiseGate);
+  const savedReferencePitch = localStorage.getItem(STORAGE_KEYS.referencePitch);
+
+  if (savedMode === "custom" && savedReactivity != null && savedNoiseGate != null) {
+    applyReactivity(savedReactivity);
+    applyNoiseGate(savedNoiseGate);
+    applyMode("custom");
+  } else {
+    applyMode(savedMode);
+  }
+
+  applyReferencePitch(savedReferencePitch ?? DEFAULT_REFERENCE_PITCH);
+  updateStringsList();
+})();
