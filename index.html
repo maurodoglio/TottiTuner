@@ -25,12 +25,14 @@
     <!-- Tuner Meter -->
     <section class="tuner-meter" id="tuner-meter" aria-label="Tuner display">
       <div class="readout">
-        <div id="note-display" aria-live="polite" aria-label="Detected note">--</div>
+        <div id="note-display" aria-hidden="true">--</div>
         <div class="readout-right">
-          <div id="freq-display" aria-live="polite">-- Hz</div>
-          <div id="cents-display" aria-live="polite">0¢</div>
+          <div id="freq-display" aria-hidden="true">-- Hz</div>
+          <div id="cents-display" aria-hidden="true">0¢</div>
         </div>
       </div>
+      <!-- Throttled live region for screen readers -->
+      <div id="tuner-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
       <!-- SVG Arc Gauge -->
       <div class="gauge-wrap">
@@ -135,6 +137,13 @@
             <option value="444">444 Hz</option>
           </select>
         </div>
+
+        <div class="haptic-control">
+          <label for="haptic-toggle" class="checkbox-label">
+            <input id="haptic-toggle" type="checkbox" checked />
+            <span>Vibrate when in tune (mobile)</span>
+          </label>
+        </div>
       </div>
 
       <div id="tuner-status" class="tuner-status" aria-live="polite">Press Start to begin</div>
@@ -152,6 +161,11 @@
 
   <footer>
     <p>Uses your microphone to detect pitch in real time</p>
+    <p class="kbd-hint">
+      Shortcuts: <kbd>Space</kbd> start/stop ·
+      <kbd>1</kbd>–<kbd>9</kbd> preview string ·
+      <kbd>M</kbd> toggle vibration
+    </p>
   </footer>
 
   <script type="module" src="tuner.js"></script>

@@ -46,6 +46,7 @@ const STORAGE_KEYS = {
   reactivity: "tottiTuner_reactivity",
   noiseGate: "tottiTuner_noiseGate",
   referencePitch: "tottiTuner_referencePitch",
+  haptic: "tottiTuner_haptic",
 };
 
 // --- Audio state ---
@@ -63,6 +64,14 @@ let lastStablePitchTime = 0;
 let lockedStringIdx = null;
 let candidateStringIdx = null;
 let candidateSinceMs = 0;
+// Pulse the meter briefly when transitioning into the in-tune zone.
+const IN_TUNE_PULSE_MS = 350;
+let wasInTune = false;
+let hapticEnabled = true;
+// Throttle screen-reader announcements so the live region isn't spammed.
+const ARIA_ANNOUNCE_MIN_MS = 1500;
+let lastAriaAnnounceMs = 0;
+let lastAriaAnnouncedNote = "";
 
 // --- UI state ---
 let currentInstrument = localStorage.getItem(STORAGE_KEYS.instrument) || "guitar";
@@ -89,6 +98,8 @@ const reactivityValue = document.getElementById("reactivity-value");
 const refPitchSelect = document.getElementById("ref-pitch-select");
 const tunerErrorHelp = document.getElementById("tuner-error-help");
 const tunerHint = document.getElementById("tuner-hint");
+const hapticToggle = document.getElementById("haptic-toggle");
+const tunerAnnouncer = document.getElementById("tuner-announcer");
 
 // Populate instrument selector, restoring saved selection
 Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
@@ -207,6 +218,8 @@ function resetDisplay() {
   tunerStatus.textContent = "Waiting for sound...";
   tunerStatus.className = "tuner-status";
   tunerMeter.className = "tuner-meter";
+  wasInTune = false;
+  lastAriaAnnouncedNote = "";
 }
 
 function setNeedle(cents) {
@@ -287,7 +300,8 @@ function updateTunerUI(frequency, timestamp) {
   highlightActiveStringByIdx(lockedIdx);
 
   const absCents = Math.abs(displayCents);
-  if (absCents <= 5) {
+  const inTune = absCents <= 5;
+  if (inTune) {
     tunerStatus.textContent = "In Tune ✓";
     tunerStatus.className = "tuner-status in-tune";
     tunerMeter.className = "tuner-meter in-tune";
@@ -299,6 +313,31 @@ function updateTunerUI(frequency, timestamp) {
     tunerStatus.textContent = displayCents < 0 ? "Flat ↓" : "Sharp ↑";
     tunerStatus.className = "tuner-status out-of-tune";
     tunerMeter.className = "tuner-meter out-of-tune";
+  }
+
+  // Positive feedback on transition into the in-tune zone.
+  if (inTune && !wasInTune) {
+    tunerMeter.classList.add("pulse");
+    setTimeout(() => tunerMeter.classList.remove("pulse"), IN_TUNE_PULSE_MS);
+    if (hapticEnabled && typeof navigator.vibrate === "function") {
+      try { navigator.vibrate(30); } catch (_) { /* ignore */ }
+    }
+  }
+  wasInTune = inTune;
+
+  // Throttled screen-reader announcement.
+  if (tunerAnnouncer) {
+    const summary = inTune
+      ? `${displayName} in tune`
+      : `${displayName}, ${Math.abs(displayCents)} cents ${displayCents < 0 ? "flat" : "sharp"}`;
+    if (
+      summary !== lastAriaAnnouncedNote &&
+      timestamp - lastAriaAnnounceMs >= ARIA_ANNOUNCE_MIN_MS
+    ) {
+      tunerAnnouncer.textContent = summary;
+      lastAriaAnnouncedNote = summary;
+      lastAriaAnnounceMs = timestamp;
+    }
   }
 }
 
@@ -502,6 +541,49 @@ refPitchSelect.addEventListener("change", (event) => {
   if (isRunning) resetDisplay();
 });
 
+if (hapticToggle) {
+  hapticToggle.addEventListener("change", (event) => {
+    hapticEnabled = !!event.target.checked;
+    localStorage.setItem(STORAGE_KEYS.haptic, hapticEnabled ? "1" : "0");
+  });
+}
+
+// --- Keyboard shortcuts ---
+// Space = start/stop, 1-9 = preview string, M = toggle haptic.
+document.addEventListener("keydown", (event) => {
+  if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+  const target = event.target;
+  // Don't hijack typing/selection in form controls (except the start button itself).
+  if (target && target !== startBtn && target !== document.body) {
+    const tag = target.tagName;
+    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || target.isContentEditable) {
+      return;
+    }
+  }
+
+  if (event.code === "Space") {
+    event.preventDefault();
+    startTuner();
+    return;
+  }
+  if (event.key === "m" || event.key === "M") {
+    if (hapticToggle) {
+      hapticToggle.checked = !hapticToggle.checked;
+      hapticToggle.dispatchEvent(new Event("change"));
+      event.preventDefault();
+    }
+    return;
+  }
+  if (/^[1-9]$/.test(event.key)) {
+    const idx = Number(event.key) - 1;
+    const buttons = stringsList.querySelectorAll(".note-button");
+    if (idx < buttons.length) {
+      buttons[idx].click();
+      event.preventDefault();
+    }
+  }
+});
+
 // --- Initialize from localStorage ---
 (function init() {
   const savedMode = localStorage.getItem(STORAGE_KEYS.mode) || DEFAULT_MODE;
@@ -518,5 +600,10 @@ refPitchSelect.addEventListener("change", (event) => {
   }
 
   applyReferencePitch(savedReferencePitch ?? DEFAULT_REFERENCE_PITCH);
+
+  const savedHaptic = localStorage.getItem(STORAGE_KEYS.haptic);
+  if (savedHaptic != null) hapticEnabled = savedHaptic === "1";
+  if (hapticToggle) hapticToggle.checked = hapticEnabled;
+
   updateStringsList();
 })();
