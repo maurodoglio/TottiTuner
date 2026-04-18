@@ -22,7 +22,43 @@
       <h2>Choose Instrument</h2>
       <select id="instrument-select" aria-label="Select instrument"></select>
       <ul id="strings-list" class="strings-grid" aria-label="String notes"></ul>
+      <div class="custom-tunings-bar">
+        <button id="manage-tunings-btn" type="button" class="link-btn">
+          ⚙ Manage custom tunings
+        </button>
+      </div>
     </section>
+
+    <!-- Custom-tunings dialog -->
+    <dialog id="tunings-dialog" class="tunings-dialog" aria-labelledby="tunings-dialog-title">
+      <form method="dialog" id="tunings-dialog-form">
+        <h2 id="tunings-dialog-title">Custom tunings</h2>
+
+        <div id="tunings-list" class="tunings-list"></div>
+
+        <h3>Add new tuning</h3>
+        <label class="dlg-field">
+          <span>Name</span>
+          <input id="new-tuning-name" type="text" maxlength="40" placeholder="e.g. Drop D" required />
+        </label>
+        <label class="dlg-field">
+          <span>Based on (for tone)</span>
+          <select id="new-tuning-base"></select>
+        </label>
+        <label class="dlg-field">
+          <span>Strings (comma-separated <code>NOTE:HZ</code>, e.g. <code>D2:73.42, A2:110</code>)</span>
+          <input id="new-tuning-strings" type="text"
+                 placeholder="E2:82.41, A2:110, D3:146.83, G3:196, B3:246.94, E4:329.63" required />
+        </label>
+
+        <p id="new-tuning-error" class="dlg-error" hidden></p>
+
+        <div class="dlg-actions">
+          <button type="button" id="add-tuning-btn">Add tuning</button>
+          <button type="submit" value="close">Done</button>
+        </div>
+      </form>
+    </dialog>
 
     <!-- Tuner Meter -->
     <section class="tuner-meter" id="tuner-meter" aria-label="Tuner display">

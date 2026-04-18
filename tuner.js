@@ -47,7 +47,10 @@ const STORAGE_KEYS = {
   haptic: "tottiTuner_haptic",
   capo: "tottiTuner_capo",
   theme: "tottiTuner_theme",
+  customTunings: "tottiTuner_customTunings",
 };
+
+const CUSTOM_KEY_PREFIX = "custom:";
 
 // --- Audio state ---
 let audioContext = null;
@@ -110,15 +113,87 @@ const historyCanvas = document.getElementById("history-canvas");
 const historyCtx = historyCanvas ? historyCanvas.getContext("2d") : null;
 const capoSelect = document.getElementById("capo-select");
 const themeToggleBtn = document.getElementById("theme-toggle");
+const manageTuningsBtn = document.getElementById("manage-tunings-btn");
+const tuningsDialog = document.getElementById("tunings-dialog");
+const tuningsList = document.getElementById("tunings-list");
+const newTuningName = document.getElementById("new-tuning-name");
+const newTuningBase = document.getElementById("new-tuning-base");
+const newTuningStrings = document.getElementById("new-tuning-strings");
+const newTuningError = document.getElementById("new-tuning-error");
+const addTuningBtn = document.getElementById("add-tuning-btn");
 
-// Populate instrument selector, restoring saved selection
-Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
-  const opt = document.createElement("option");
-  opt.value = key;
-  opt.textContent = inst.label;
-  if (key === currentInstrument) opt.selected = true;
-  instrumentSelect.appendChild(opt);
-});
+// Instrument selector is populated dynamically in init() via renderInstrumentSelect(),
+// which merges built-in INSTRUMENTS with any saved custom tunings.
+
+// --- Custom tunings ---
+let customTunings = {}; // { id: { label, baseInstrument, strings: [{note,freq}] } }
+
+function loadCustomTunings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.customTunings);
+    customTunings = raw ? (JSON.parse(raw) || {}) : {};
+  } catch (_) {
+    customTunings = {};
+  }
+}
+
+function saveCustomTunings() {
+  localStorage.setItem(STORAGE_KEYS.customTunings, JSON.stringify(customTunings));
+}
+
+// Returns the tuning definition for a key, looking up built-in instruments and
+// custom tunings (prefixed with "custom:"). Always has { label, harmonics, strings }.
+function getInstrumentDef(key) {
+  if (key && key.startsWith(CUSTOM_KEY_PREFIX)) {
+    const id = key.slice(CUSTOM_KEY_PREFIX.length);
+    const t = customTunings[id];
+    if (!t) return null;
+    const base = INSTRUMENTS[t.baseInstrument] || INSTRUMENTS.guitar;
+    return { label: t.label, harmonics: base.harmonics, strings: t.strings };
+  }
+  return INSTRUMENTS[key] || null;
+}
+
+function currentDef() {
+  return getInstrumentDef(currentInstrument) || INSTRUMENTS.guitar;
+}
+
+function renderInstrumentSelect() {
+  const previous = currentInstrument;
+  instrumentSelect.innerHTML = "";
+
+  const builtinGroup = document.createElement("optgroup");
+  builtinGroup.label = "Built-in";
+  Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = inst.label;
+    builtinGroup.appendChild(opt);
+  });
+  instrumentSelect.appendChild(builtinGroup);
+
+  const customIds = Object.keys(customTunings);
+  if (customIds.length) {
+    const customGroup = document.createElement("optgroup");
+    customGroup.label = "Custom";
+    customIds.forEach((id) => {
+      const opt = document.createElement("option");
+      opt.value = CUSTOM_KEY_PREFIX + id;
+      opt.textContent = "★ " + customTunings[id].label;
+      customGroup.appendChild(opt);
+    });
+    instrumentSelect.appendChild(customGroup);
+  }
+
+  // Restore selection (or fall back to guitar if previous tuning no longer exists).
+  if (getInstrumentDef(previous)) {
+    instrumentSelect.value = previous;
+  } else {
+    currentInstrument = "guitar";
+    instrumentSelect.value = "guitar";
+    localStorage.setItem(STORAGE_KEYS.instrument, currentInstrument);
+  }
+}
 
 // INSTRUMENTS frequencies are defined at A4=440. Scale proportionally for other reference pitches.
 // Also apply the capo (transposes every string up by N semitones).
@@ -129,7 +204,7 @@ function scaledFreq(baseFreq) {
 
 function updateStringsList() {
   stringsList.innerHTML = "";
-  INSTRUMENTS[currentInstrument].strings.forEach(({ note, freq }) => {
+  currentDef().strings.forEach(({ note, freq }) => {
     const adjustedFreq = scaledFreq(freq);
     const midi = noteFromFrequency(adjustedFreq, referencePitch);
     // When a capo is applied, the sounding note differs from the open-string label.
@@ -326,7 +401,7 @@ function resetStringLock() {
 
 // Returns the index of the auto-locked string, or null if no string is close enough.
 function pickLockedStringIdx(frequency, timestamp) {
-  const strings = INSTRUMENTS[currentInstrument].strings;
+  const strings = currentDef().strings;
   let bestIdx = 0;
   let bestAbs = Infinity;
   for (let i = 0; i < strings.length; i++) {
@@ -368,7 +443,7 @@ function updateTunerUI(frequency, timestamp) {
   let displayCents;
 
   if (lockedIdx !== null) {
-    const target = INSTRUMENTS[currentInstrument].strings[lockedIdx];
+    const target = currentDef().strings[lockedIdx];
     const targetFreq = scaledFreq(target.freq);
     const rawCents = 1200 * Math.log2(frequency / targetFreq);
     // Clamp displayed cents so wildly out-of-tune readings don't show 1500¢.
@@ -499,7 +574,7 @@ function playNotePreview(freq, element) {
 
   stopActivePreview();
 
-  const { harmonics } = INSTRUMENTS[currentInstrument];
+  const { harmonics } = currentDef();
   const real = new Float32Array(harmonics);
   const imag = new Float32Array(harmonics.length);
   const wave = context.createPeriodicWave(real, imag);
@@ -690,6 +765,134 @@ if (themeToggleBtn) {
   });
 }
 
+// --- Custom tunings dialog ---
+function renderTuningsList() {
+  if (!tuningsList) return;
+  tuningsList.innerHTML = "";
+  Object.entries(customTunings).forEach(([id, t]) => {
+    const row = document.createElement("div");
+    row.className = "tuning-row";
+    const meta = t.strings.map(s => `${s.note}:${s.freq}`).join(", ");
+    const info = document.createElement("div");
+    info.className = "tuning-info";
+    const nameEl = document.createElement("div");
+    nameEl.className = "tuning-name";
+    nameEl.textContent = t.label;
+    const metaEl = document.createElement("div");
+    metaEl.className = "tuning-meta";
+    metaEl.title = meta;
+    metaEl.textContent = meta;
+    info.appendChild(nameEl);
+    info.appendChild(metaEl);
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Delete";
+    del.addEventListener("click", () => {
+      delete customTunings[id];
+      saveCustomTunings();
+      renderTuningsList();
+      renderInstrumentSelect();
+      // If we just deleted the currently-selected one, switch to guitar.
+      if (currentInstrument === CUSTOM_KEY_PREFIX + id) {
+        currentInstrument = "guitar";
+        instrumentSelect.value = "guitar";
+        localStorage.setItem(STORAGE_KEYS.instrument, currentInstrument);
+        stopActivePreview();
+        resetStringLock();
+        updateStringsList();
+        resetDisplay();
+      }
+    });
+    row.appendChild(info);
+    row.appendChild(del);
+    tuningsList.appendChild(row);
+  });
+}
+
+function populateNewTuningBaseSelect() {
+  if (!newTuningBase) return;
+  newTuningBase.innerHTML = "";
+  Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = inst.label;
+    newTuningBase.appendChild(opt);
+  });
+}
+
+function parseTuningStrings(text) {
+  const parts = text.split(",").map(s => s.trim()).filter(Boolean);
+  if (!parts.length) throw new Error("Add at least one string.");
+  if (parts.length > 12) throw new Error("Too many strings (max 12).");
+  return parts.map((p, i) => {
+    const m = p.match(/^([A-Ga-g][#b]?-?\d):\s*([0-9]+(?:\.[0-9]+)?)$/);
+    if (!m) throw new Error(`String ${i + 1} ("${p}") must look like NOTE:HZ, e.g. "E2:82.41".`);
+    const freq = Number(m[2]);
+    if (!Number.isFinite(freq) || freq < 16 || freq > 5000) {
+      throw new Error(`String ${i + 1}: frequency must be between 16 and 5000 Hz.`);
+    }
+    return { note: m[1].toUpperCase(), freq };
+  });
+}
+
+function openTuningsDialog() {
+  if (!tuningsDialog) return;
+  populateNewTuningBaseSelect();
+  renderTuningsList();
+  if (newTuningName) newTuningName.value = "";
+  if (newTuningStrings) newTuningStrings.value = "";
+  if (newTuningError) {
+    newTuningError.textContent = "";
+    newTuningError.hidden = true;
+  }
+  if (typeof tuningsDialog.showModal === "function") {
+    tuningsDialog.showModal();
+  } else {
+    tuningsDialog.setAttribute("open", "");
+  }
+}
+
+if (manageTuningsBtn) {
+  manageTuningsBtn.addEventListener("click", openTuningsDialog);
+}
+
+if (addTuningBtn) {
+  addTuningBtn.addEventListener("click", () => {
+    if (!newTuningName || !newTuningStrings || !newTuningBase) return;
+    const name = newTuningName.value.trim();
+    const base = newTuningBase.value;
+    if (!name) {
+      showTuningError("Please enter a name.");
+      return;
+    }
+    if (!INSTRUMENTS[base]) {
+      showTuningError("Pick a base instrument.");
+      return;
+    }
+    let strings;
+    try {
+      strings = parseTuningStrings(newTuningStrings.value);
+    } catch (err) {
+      showTuningError(err.message);
+      return;
+    }
+    const id = "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    customTunings[id] = { label: name, baseInstrument: base, strings };
+    saveCustomTunings();
+    renderTuningsList();
+    renderInstrumentSelect();
+    if (newTuningError) { newTuningError.textContent = ""; newTuningError.hidden = true; }
+    if (newTuningName) newTuningName.value = "";
+    if (newTuningStrings) newTuningStrings.value = "";
+  });
+}
+
+function showTuningError(msg) {
+  if (!newTuningError) return;
+  newTuningError.textContent = msg;
+  newTuningError.hidden = false;
+}
+
 // --- Keyboard shortcuts ---
 // Space = start/stop, 1-9 = preview string, M = toggle haptic.
 document.addEventListener("keydown", (event) => {
@@ -732,6 +935,13 @@ window.addEventListener("resize", () => {
 
 // --- Initialize from localStorage ---
 (function init() {
+  loadCustomTunings();
+  renderInstrumentSelect();
+  // Ensure the dropdown reflects the (possibly fallback-corrected) currentInstrument.
+  if (instrumentSelect && getInstrumentDef(currentInstrument)) {
+    instrumentSelect.value = currentInstrument;
+  }
+
   const savedMode = localStorage.getItem(STORAGE_KEYS.mode) || DEFAULT_MODE;
   const savedReactivity = localStorage.getItem(STORAGE_KEYS.reactivity);
   const savedNoiseGate = localStorage.getItem(STORAGE_KEYS.noiseGate);

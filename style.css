@@ -241,6 +241,139 @@ select:focus { outline: 2px solid var(--accent); }
   color: var(--muted);
 }
 
+/* Custom tunings */
+.custom-tunings-bar {
+  margin-top: 0.75rem;
+  text-align: right;
+}
+
+.link-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.link-btn:hover { color: var(--text); }
+
+.tunings-dialog {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+  max-width: 520px;
+  width: calc(100% - 2rem);
+  box-shadow: var(--shadow);
+}
+.tunings-dialog::backdrop {
+  background: rgba(0,0,0,0.6);
+}
+.tunings-dialog h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.75rem;
+}
+.tunings-dialog h3 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 1rem 0 0.5rem;
+}
+
+.tunings-list:empty::before {
+  content: "No custom tunings yet.";
+  display: block;
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 0.5rem 0;
+}
+.tuning-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.tuning-row:last-child { border-bottom: none; }
+.tuning-row .tuning-info {
+  flex: 1;
+  min-width: 0;
+}
+.tuning-row .tuning-name {
+  font-weight: 600;
+}
+.tuning-row .tuning-meta {
+  font-size: 0.75rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tuning-row button {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.tuning-row button:hover { border-color: var(--accent); }
+
+.dlg-field {
+  display: block;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.dlg-field span { display: block; margin-bottom: 0.25rem; }
+.dlg-field input[type="text"],
+.dlg-field select {
+  width: 100%;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.95rem;
+}
+.dlg-field code {
+  background: var(--surface2);
+  padding: 0 0.25rem;
+  border-radius: 3px;
+  font-size: 0.8rem;
+}
+.dlg-error {
+  color: var(--accent);
+  font-size: 0.8rem;
+  margin-bottom: 0.5rem;
+}
+.dlg-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.dlg-actions button {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.dlg-actions button[type="submit"] {
+  background: linear-gradient(135deg, var(--accent), #a855f7);
+  color: #fff;
+  border-color: transparent;
+}
+
 /* ---- Tuner Meter ---- */
 .tuner-meter {
   position: relative;
