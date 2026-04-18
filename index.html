@@ -80,6 +80,10 @@
         </svg>
       </div>
 
+      <!-- Tuning history strip chart -->
+      <canvas id="history-canvas" class="history-canvas" width="560" height="60"
+              aria-label="Recent tuning history" role="img"></canvas>
+
       <div class="tuner-controls">
         <div class="mode-control">
           <label for="mode-select">Response Mode</label>
@@ -143,6 +147,25 @@
             <input id="haptic-toggle" type="checkbox" checked />
             <span>Vibrate when in tune (mobile)</span>
           </label>
+        </div>
+
+        <div class="capo-control">
+          <label for="capo-select">Capo</label>
+          <select id="capo-select" aria-label="Capo position in frets (semitones)">
+            <option value="0" selected>None</option>
+            <option value="1">1st fret (+1)</option>
+            <option value="2">2nd fret (+2)</option>
+            <option value="3">3rd fret (+3)</option>
+            <option value="4">4th fret (+4)</option>
+            <option value="5">5th fret (+5)</option>
+            <option value="6">6th fret (+6)</option>
+            <option value="7">7th fret (+7)</option>
+            <option value="8">8th fret (+8)</option>
+            <option value="9">9th fret (+9)</option>
+            <option value="10">10th fret (+10)</option>
+            <option value="11">11th fret (+11)</option>
+            <option value="12">12th fret (+12)</option>
+          </select>
         </div>
       </div>
 

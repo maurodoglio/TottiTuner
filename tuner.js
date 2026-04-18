@@ -47,6 +47,7 @@ const STORAGE_KEYS = {
   noiseGate: "tottiTuner_noiseGate",
   referencePitch: "tottiTuner_referencePitch",
   haptic: "tottiTuner_haptic",
+  capo: "tottiTuner_capo",
 };
 
 // --- Audio state ---
@@ -73,12 +74,18 @@ const ARIA_ANNOUNCE_MIN_MS = 1500;
 let lastAriaAnnounceMs = 0;
 let lastAriaAnnouncedNote = "";
 
+// Tuning history strip chart (ring buffer of {cents, valid}).
+const HISTORY_LEN = 140;
+const historyBuffer = new Array(HISTORY_LEN).fill(null);
+let historyHead = 0; // index where next sample will be written
+
 // --- UI state ---
 let currentInstrument = localStorage.getItem(STORAGE_KEYS.instrument) || "guitar";
 let mode = DEFAULT_MODE;
 let noiseGate = DEFAULT_NOISE_GATE;
 let reactivity = DEFAULT_REACTIVITY;
 let referencePitch = DEFAULT_REFERENCE_PITCH;
+let capoSemitones = 0;
 
 // --- DOM refs ---
 const startBtn = document.getElementById("start-btn");
@@ -100,6 +107,9 @@ const tunerErrorHelp = document.getElementById("tuner-error-help");
 const tunerHint = document.getElementById("tuner-hint");
 const hapticToggle = document.getElementById("haptic-toggle");
 const tunerAnnouncer = document.getElementById("tuner-announcer");
+const historyCanvas = document.getElementById("history-canvas");
+const historyCtx = historyCanvas ? historyCanvas.getContext("2d") : null;
+const capoSelect = document.getElementById("capo-select");
 
 // Populate instrument selector, restoring saved selection
 Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
@@ -111,22 +121,28 @@ Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
 });
 
 // INSTRUMENTS frequencies are defined at A4=440. Scale proportionally for other reference pitches.
+// Also apply the capo (transposes every string up by N semitones).
 function scaledFreq(baseFreq) {
-  return baseFreq * (referencePitch / 440);
+  const capoFactor = Math.pow(2, capoSemitones / 12);
+  return baseFreq * (referencePitch / 440) * capoFactor;
 }
 
 function updateStringsList() {
   stringsList.innerHTML = "";
   INSTRUMENTS[currentInstrument].strings.forEach(({ note, freq }) => {
     const adjustedFreq = scaledFreq(freq);
+    const midi = noteFromFrequency(adjustedFreq, referencePitch);
+    // When a capo is applied, the sounding note differs from the open-string label.
+    const displayNote = capoSemitones > 0 ? noteName(midi) : note;
     const li = document.createElement("li");
     li.tabIndex = 0;
     li.setAttribute("role", "button");
-    li.setAttribute("aria-label", `Play ${note} at ${adjustedFreq.toFixed(2)} Hz`);
+    li.setAttribute("aria-label", `Play ${displayNote} at ${adjustedFreq.toFixed(2)} Hz`);
     li.classList.add("note-button");
     // Store MIDI note number for active-string highlighting comparison
-    li.dataset.midi = String(noteFromFrequency(adjustedFreq, referencePitch));
-    li.innerHTML = `<span class="string-note">${note}</span><span class="string-freq">${adjustedFreq.toFixed(2)} Hz</span>`;
+    li.dataset.midi = String(midi);
+    li.dataset.noteLabel = displayNote;
+    li.innerHTML = `<span class="string-note">${displayNote}</span><span class="string-freq">${adjustedFreq.toFixed(2)} Hz</span>`;
     li.addEventListener("click", () => playNotePreview(adjustedFreq));
     li.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
@@ -205,6 +221,12 @@ function applyReferencePitch(value) {
     : String(DEFAULT_REFERENCE_PITCH);
 }
 
+function applyCapo(value) {
+  const parsed = Number(value);
+  capoSemitones = Number.isFinite(parsed) ? Math.max(0, Math.min(12, Math.round(parsed))) : 0;
+  if (capoSelect) capoSelect.value = String(capoSemitones);
+}
+
 function clearActiveStrings() {
   stringsList.querySelectorAll(".note-button.active").forEach(el => el.classList.remove("active"));
 }
@@ -215,6 +237,7 @@ function resetDisplay() {
   centsDisplay.textContent = "0¢";
   setNeedle(0);
   clearActiveStrings();
+  clearHistory();
   tunerStatus.textContent = "Waiting for sound...";
   tunerStatus.className = "tuner-status";
   tunerMeter.className = "tuner-meter";
@@ -227,6 +250,71 @@ function setNeedle(cents) {
   const clamped = Math.max(-50, Math.min(50, cents));
   const deg = (clamped / 50) * 85;
   needle.style.transform = `rotate(${deg}deg)`;
+}
+
+function pushHistorySample(cents) {
+  historyBuffer[historyHead] = { cents };
+  historyHead = (historyHead + 1) % HISTORY_LEN;
+}
+
+function clearHistory() {
+  for (let i = 0; i < HISTORY_LEN; i++) historyBuffer[i] = null;
+  historyHead = 0;
+  drawHistory();
+}
+
+function colorForCents(absCents) {
+  if (absCents <= 5) return "#00d4a0"; // green
+  if (absCents <= 15) return "#f5a623"; // yellow
+  return "#e94560"; // red
+}
+
+function drawHistory() {
+  if (!historyCtx) return;
+  // Match canvas pixel size to its CSS size for crisp rendering.
+  const cssW = historyCanvas.clientWidth || historyCanvas.width;
+  const cssH = historyCanvas.clientHeight || historyCanvas.height;
+  const dpr = window.devicePixelRatio || 1;
+  const targetW = Math.round(cssW * dpr);
+  const targetH = Math.round(cssH * dpr);
+  if (historyCanvas.width !== targetW) historyCanvas.width = targetW;
+  if (historyCanvas.height !== targetH) historyCanvas.height = targetH;
+
+  const w = historyCanvas.width;
+  const h = historyCanvas.height;
+  historyCtx.clearRect(0, 0, w, h);
+
+  // Center line
+  historyCtx.strokeStyle = "rgba(0, 212, 160, 0.45)";
+  historyCtx.lineWidth = Math.max(1, dpr);
+  historyCtx.beginPath();
+  historyCtx.moveTo(0, h / 2);
+  historyCtx.lineTo(w, h / 2);
+  historyCtx.stroke();
+
+  // ±15¢ guide band
+  const bandRange = 15;
+  const halfBand = (bandRange / 50) * (h / 2);
+  historyCtx.fillStyle = "rgba(245, 166, 35, 0.08)";
+  historyCtx.fillRect(0, h / 2 - halfBand, w, halfBand * 2);
+  // ±5¢ in-tune band
+  const goodBand = (5 / 50) * (h / 2);
+  historyCtx.fillStyle = "rgba(0, 212, 160, 0.12)";
+  historyCtx.fillRect(0, h / 2 - goodBand, w, goodBand * 2);
+
+  // Sample dots, oldest on the left, newest on the right.
+  const dotR = Math.max(1.2, 1.6 * dpr);
+  for (let i = 0; i < HISTORY_LEN; i++) {
+    const sample = historyBuffer[(historyHead + i) % HISTORY_LEN];
+    if (!sample) continue;
+    const clamped = Math.max(-50, Math.min(50, sample.cents));
+    const x = (i / (HISTORY_LEN - 1)) * w;
+    const y = h / 2 - (clamped / 50) * (h / 2 - dotR);
+    historyCtx.fillStyle = colorForCents(Math.abs(sample.cents));
+    historyCtx.beginPath();
+    historyCtx.arc(x, y, dotR, 0, Math.PI * 2);
+    historyCtx.fill();
+  }
 }
 
 function resetStringLock() {
@@ -284,7 +372,10 @@ function updateTunerUI(frequency, timestamp) {
     const rawCents = 1200 * Math.log2(frequency / targetFreq);
     // Clamp displayed cents so wildly out-of-tune readings don't show 1500¢.
     displayCents = Math.max(-99, Math.min(99, Math.round(rawCents)));
-    displayName = target.note;
+    // Read the capo-aware label from the rendered string button if available,
+    // falling back to the static note label.
+    const li = stringsList.children[lockedIdx];
+    displayName = (li && li.dataset && li.dataset.noteLabel) || target.note;
   } else {
     // Fallback: show closest semitone (original behavior).
     const noteNum = noteFromFrequency(frequency, referencePitch);
@@ -298,6 +389,8 @@ function updateTunerUI(frequency, timestamp) {
 
   setNeedle(displayCents);
   highlightActiveStringByIdx(lockedIdx);
+  pushHistorySample(displayCents);
+  drawHistory();
 
   const absCents = Math.abs(displayCents);
   const inTune = absCents <= 5;
@@ -548,6 +641,16 @@ if (hapticToggle) {
   });
 }
 
+if (capoSelect) {
+  capoSelect.addEventListener("change", (event) => {
+    applyCapo(event.target.value);
+    localStorage.setItem(STORAGE_KEYS.capo, String(capoSemitones));
+    resetStringLock();
+    updateStringsList();
+    if (isRunning) resetDisplay();
+  });
+}
+
 // --- Keyboard shortcuts ---
 // Space = start/stop, 1-9 = preview string, M = toggle haptic.
 document.addEventListener("keydown", (event) => {
@@ -584,6 +687,10 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+window.addEventListener("resize", () => {
+  drawHistory();
+});
+
 // --- Initialize from localStorage ---
 (function init() {
   const savedMode = localStorage.getItem(STORAGE_KEYS.mode) || DEFAULT_MODE;
@@ -600,6 +707,9 @@ document.addEventListener("keydown", (event) => {
   }
 
   applyReferencePitch(savedReferencePitch ?? DEFAULT_REFERENCE_PITCH);
+
+  const savedCapo = localStorage.getItem(STORAGE_KEYS.capo);
+  applyCapo(savedCapo ?? 0);
 
   const savedHaptic = localStorage.getItem(STORAGE_KEYS.haptic);
   if (savedHaptic != null) hapticEnabled = savedHaptic === "1";

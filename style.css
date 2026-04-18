@@ -270,6 +270,17 @@ select:focus { outline: 2px solid var(--accent); }
   overflow: visible;
 }
 
+/* Tuning history strip chart */
+.history-canvas {
+  display: block;
+  width: 100%;
+  height: 60px;
+  margin: 0.6rem 0 1rem;
+  background: var(--surface2);
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
 /* Needle */
 #needle {
   transform-origin: center bottom;
