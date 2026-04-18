@@ -290,6 +290,26 @@ select:focus { outline: 2px solid var(--accent); }
 .tuner-status.slightly-off { color: var(--yellow); }
 .tuner-status.out-of-tune  { color: var(--accent); }
 
+/* Onboarding hint and error help */
+.tuner-hint {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-align: center;
+  line-height: 1.4;
+}
+
+.tuner-error-help {
+  margin-top: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: rgba(233, 69, 96, 0.1);
+  border: 1px solid rgba(233, 69, 96, 0.4);
+  border-radius: 8px;
+  line-height: 1.45;
+}
+
 /* Start button */
 .btn-start {
   background: linear-gradient(135deg, #e94560, #a855f7);

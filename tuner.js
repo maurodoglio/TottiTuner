@@ -21,6 +21,12 @@ const DEFAULT_REACTIVITY = 60;
 const DEFAULT_MODE = "balanced";
 const DEFAULT_REFERENCE_PITCH = 440;
 const PITCH_HOLD_MS = 280;
+// String auto-lock: must see a different string be the closest for this long
+// before switching the highlight. Prevents flicker between adjacent strings.
+const STRING_LOCK_MS = 500;
+// If detected pitch is farther than this from every string, fall back to
+// closest-semitone display (user is probably playing something else).
+const STRING_FALLBACK_CENTS = 700;
 const MAX_SAMPLE_INTERVAL_MS = 130;
 const MIN_SAMPLE_INTERVAL_MS = 25;
 const MIN_RMS_THRESHOLD = 0.004;
@@ -53,6 +59,10 @@ let activePreview = null; // { oscillator, gainNode }
 let smoothedFrequency = null;
 let lastAnalysisTime = 0;
 let lastStablePitchTime = 0;
+// Auto-string-lock state
+let lockedStringIdx = null;
+let candidateStringIdx = null;
+let candidateSinceMs = 0;
 
 // --- UI state ---
 let currentInstrument = localStorage.getItem(STORAGE_KEYS.instrument) || "guitar";
@@ -77,6 +87,8 @@ const noiseGateValue = document.getElementById("noise-gate-value");
 const reactivitySlider = document.getElementById("reactivity-slider");
 const reactivityValue = document.getElementById("reactivity-value");
 const refPitchSelect = document.getElementById("ref-pitch-select");
+const tunerErrorHelp = document.getElementById("tuner-error-help");
+const tunerHint = document.getElementById("tuner-hint");
 
 // Populate instrument selector, restoring saved selection
 Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
@@ -117,6 +129,7 @@ function updateStringsList() {
 instrumentSelect.addEventListener("change", () => {
   currentInstrument = instrumentSelect.value;
   localStorage.setItem(STORAGE_KEYS.instrument, currentInstrument);
+  resetStringLock();
   updateStringsList();
   resetDisplay();
 });
@@ -203,42 +216,94 @@ function setNeedle(cents) {
   needle.style.transform = `rotate(${deg}deg)`;
 }
 
-function highlightActiveString(noteNum, cents) {
-  const midiStr = String(noteNum);
-  stringsList.querySelectorAll(".note-button").forEach(li => {
-    li.classList.toggle("active", li.dataset.midi === midiStr && Math.abs(cents) <= 15);
+function resetStringLock() {
+  lockedStringIdx = null;
+  candidateStringIdx = null;
+  candidateSinceMs = 0;
+}
+
+// Returns the index of the auto-locked string, or null if no string is close enough.
+function pickLockedStringIdx(frequency, timestamp) {
+  const strings = INSTRUMENTS[currentInstrument].strings;
+  let bestIdx = 0;
+  let bestAbs = Infinity;
+  for (let i = 0; i < strings.length; i++) {
+    const targetFreq = scaledFreq(strings[i].freq);
+    const cents = Math.abs(1200 * Math.log2(frequency / targetFreq));
+    if (cents < bestAbs) {
+      bestAbs = cents;
+      bestIdx = i;
+    }
+  }
+  if (bestAbs > STRING_FALLBACK_CENTS) return null;
+
+  if (lockedStringIdx === null) {
+    lockedStringIdx = bestIdx;
+    candidateStringIdx = bestIdx;
+    candidateSinceMs = timestamp;
+  } else if (bestIdx === lockedStringIdx) {
+    candidateStringIdx = bestIdx;
+    candidateSinceMs = timestamp;
+  } else if (candidateStringIdx !== bestIdx) {
+    candidateStringIdx = bestIdx;
+    candidateSinceMs = timestamp;
+  } else if (timestamp - candidateSinceMs >= STRING_LOCK_MS) {
+    lockedStringIdx = bestIdx;
+  }
+  return lockedStringIdx;
+}
+
+function highlightActiveStringByIdx(idx) {
+  const targetMidi = idx == null ? null : stringsList.children[idx]?.dataset.midi;
+  stringsList.querySelectorAll(".note-button").forEach((li, i) => {
+    li.classList.toggle("active", targetMidi != null && i === idx);
   });
 }
 
-function updateTunerUI(frequency) {
-  const noteNum = noteFromFrequency(frequency, referencePitch);
-  const cents = centsOffFromPitch(frequency, noteNum, referencePitch);
-  const name = noteName(noteNum);
+function updateTunerUI(frequency, timestamp) {
+  const lockedIdx = pickLockedStringIdx(frequency, timestamp);
+  let displayName;
+  let displayCents;
 
-  noteDisplay.textContent = name;
+  if (lockedIdx !== null) {
+    const target = INSTRUMENTS[currentInstrument].strings[lockedIdx];
+    const targetFreq = scaledFreq(target.freq);
+    const rawCents = 1200 * Math.log2(frequency / targetFreq);
+    // Clamp displayed cents so wildly out-of-tune readings don't show 1500¢.
+    displayCents = Math.max(-99, Math.min(99, Math.round(rawCents)));
+    displayName = target.note;
+  } else {
+    // Fallback: show closest semitone (original behavior).
+    const noteNum = noteFromFrequency(frequency, referencePitch);
+    displayCents = centsOffFromPitch(frequency, noteNum, referencePitch);
+    displayName = noteName(noteNum);
+  }
+
+  noteDisplay.textContent = displayName;
   freqDisplay.textContent = `${frequency.toFixed(1)} Hz`;
-  centsDisplay.textContent = `${cents >= 0 ? "+" : ""}${cents}¢`;
+  centsDisplay.textContent = `${displayCents >= 0 ? "+" : ""}${displayCents}¢`;
 
-  setNeedle(cents);
-  highlightActiveString(noteNum, cents);
+  setNeedle(displayCents);
+  highlightActiveStringByIdx(lockedIdx);
 
-  const absCents = Math.abs(cents);
+  const absCents = Math.abs(displayCents);
   if (absCents <= 5) {
     tunerStatus.textContent = "In Tune ✓";
     tunerStatus.className = "tuner-status in-tune";
     tunerMeter.className = "tuner-meter in-tune";
   } else if (absCents <= 15) {
-    tunerStatus.textContent = cents < 0 ? "Slightly Flat ↓" : "Slightly Sharp ↑";
+    tunerStatus.textContent = displayCents < 0 ? "Slightly Flat ↓" : "Slightly Sharp ↑";
     tunerStatus.className = "tuner-status slightly-off";
     tunerMeter.className = "tuner-meter slightly-off";
   } else {
-    tunerStatus.textContent = cents < 0 ? "Flat ↓" : "Sharp ↑";
+    tunerStatus.textContent = displayCents < 0 ? "Flat ↓" : "Sharp ↑";
     tunerStatus.className = "tuner-status out-of-tune";
     tunerMeter.className = "tuner-meter out-of-tune";
   }
 }
 
 function processAudio(timestamp) {
+  if (timestamp == null) timestamp = performance.now();
   if (timestamp - lastAnalysisTime < getSampleIntervalMs()) {
     animFrame = requestAnimationFrame(processAudio);
     return;
@@ -256,9 +321,10 @@ function processAudio(timestamp) {
       smoothedFrequency += (frequency - smoothedFrequency) * getSmoothingAlpha();
     }
     lastStablePitchTime = timestamp;
-    updateTunerUI(smoothedFrequency);
+    updateTunerUI(smoothedFrequency, timestamp);
   } else if (timestamp - lastStablePitchTime > PITCH_HOLD_MS) {
     smoothedFrequency = null;
+    resetStringLock();
     resetDisplay();
   }
 
@@ -338,23 +404,43 @@ async function startTuner() {
     smoothedFrequency = null;
     lastAnalysisTime = performance.now() - getSampleIntervalMs();
     lastStablePitchTime = performance.now();
+    resetStringLock();
     isRunning = true;
     startBtn.textContent = "Stop Tuner";
     startBtn.classList.add("active");
     startBtn.setAttribute("aria-pressed", "true");
     tunerStatus.textContent = "Listening...";
+    tunerStatus.className = "tuner-status";
+    if (tunerErrorHelp) {
+      tunerErrorHelp.hidden = true;
+      tunerErrorHelp.textContent = "";
+    }
+    if (tunerHint) tunerHint.hidden = true;
     processAudio();
   } catch (err) {
+    let helpText = "";
     if (err.name === "InsecureContextError") {
       tunerStatus.textContent = "Use HTTPS (or localhost) to enable microphone";
+      helpText = "Browsers only allow microphone access on secure (HTTPS) pages or on localhost. Try opening this page over HTTPS.";
     } else if (err.name === "NotSupportedError") {
       tunerStatus.textContent = "Microphone is not supported in this browser";
+      helpText = "Try a recent version of Chrome, Firefox, Edge, or Safari.";
     } else if (err.name === "NotFoundError") {
       tunerStatus.textContent = "No microphone device found";
+      helpText = "Plug in or enable a microphone, then press Start again.";
+    } else if (err.name === "NotAllowedError" || err.name === "SecurityError") {
+      tunerStatus.textContent = "Microphone access denied";
+      helpText = "To re-enable: click the lock/permissions icon in your browser's address bar, allow microphone access for this site, then reload the page.";
     } else {
       tunerStatus.textContent = "Microphone access denied";
+      helpText = "Check your browser's microphone permissions for this site, then try again.";
     }
     tunerStatus.className = "tuner-status out-of-tune";
+    if (tunerErrorHelp) {
+      tunerErrorHelp.textContent = helpText;
+      tunerErrorHelp.hidden = !helpText;
+    }
+    if (tunerHint) tunerHint.hidden = true;
     console.error(err);
   }
 }
@@ -374,6 +460,7 @@ function stopTuner() {
   smoothedFrequency = null;
   lastAnalysisTime = 0;
   lastStablePitchTime = 0;
+  resetStringLock();
   previewAudioContext = null;
   isRunning = false;
   startBtn.textContent = "Start Tuner";
