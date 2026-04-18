@@ -12,8 +12,6 @@ const PREVIEW_PEAK_GAIN = 0.14;
 // Must be greater than 0 for exponential ramps.
 const PREVIEW_MIN_GAIN = 0.0001;
 const PREVIEW_ATTACK_TIME = 0.02;
-const PREVIEW_SUSTAIN_TIME = 1.0;
-const PREVIEW_RELEASE_TIME = 0.4;
 // Short fade when interrupting a preview mid-playback, to avoid clicks.
 const PREVIEW_STOP_FADE_TIME = 0.02;
 const DEFAULT_NOISE_GATE = 50;
@@ -48,6 +46,7 @@ const STORAGE_KEYS = {
   referencePitch: "tottiTuner_referencePitch",
   haptic: "tottiTuner_haptic",
   capo: "tottiTuner_capo",
+  theme: "tottiTuner_theme",
 };
 
 // --- Audio state ---
@@ -110,6 +109,7 @@ const tunerAnnouncer = document.getElementById("tuner-announcer");
 const historyCanvas = document.getElementById("history-canvas");
 const historyCtx = historyCanvas ? historyCanvas.getContext("2d") : null;
 const capoSelect = document.getElementById("capo-select");
+const themeToggleBtn = document.getElementById("theme-toggle");
 
 // Populate instrument selector, restoring saved selection
 Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
@@ -137,17 +137,17 @@ function updateStringsList() {
     const li = document.createElement("li");
     li.tabIndex = 0;
     li.setAttribute("role", "button");
-    li.setAttribute("aria-label", `Play ${displayNote} at ${adjustedFreq.toFixed(2)} Hz`);
+    li.setAttribute("aria-label", `Toggle reference tone for ${displayNote} (${adjustedFreq.toFixed(2)} Hz)`);
     li.classList.add("note-button");
     // Store MIDI note number for active-string highlighting comparison
     li.dataset.midi = String(midi);
     li.dataset.noteLabel = displayNote;
     li.innerHTML = `<span class="string-note">${displayNote}</span><span class="string-freq">${adjustedFreq.toFixed(2)} Hz</span>`;
-    li.addEventListener("click", () => playNotePreview(adjustedFreq));
+    li.addEventListener("click", () => togglePreview(adjustedFreq, li));
     li.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
-      playNotePreview(adjustedFreq);
+      togglePreview(adjustedFreq, li);
     });
     stringsList.appendChild(li);
   });
@@ -156,6 +156,7 @@ function updateStringsList() {
 instrumentSelect.addEventListener("change", () => {
   currentInstrument = instrumentSelect.value;
   localStorage.setItem(STORAGE_KEYS.instrument, currentInstrument);
+  stopActivePreview();
   resetStringLock();
   updateStringsList();
   resetDisplay();
@@ -472,16 +473,27 @@ function getPreviewAudioContext() {
 
 function stopActivePreview() {
   if (!activePreview) return;
-  const { oscillator, gainNode } = activePreview;
+  const { oscillator, gainNode, element } = activePreview;
   const now = previewAudioContext.currentTime;
   gainNode.gain.cancelScheduledValues(now);
   gainNode.gain.setValueAtTime(gainNode.gain.value, now);
   gainNode.gain.linearRampToValueAtTime(0, now + PREVIEW_STOP_FADE_TIME);
   try { oscillator.stop(now + PREVIEW_STOP_FADE_TIME); } catch (_) {}
+  if (element) element.classList.remove("playing");
   activePreview = null;
 }
 
-function playNotePreview(freq) {
+// Click-to-toggle a sustained reference tone. Clicking the playing string stops
+// it; clicking another string switches to it.
+function togglePreview(freq, element) {
+  if (activePreview && activePreview.element === element) {
+    stopActivePreview();
+    return;
+  }
+  playNotePreview(freq, element);
+}
+
+function playNotePreview(freq, element) {
   const context = getPreviewAudioContext();
   if (context.state === "suspended") context.resume();
 
@@ -495,26 +507,26 @@ function playNotePreview(freq) {
   const oscillator = context.createOscillator();
   const gainNode = context.createGain();
   const now = context.currentTime;
-  const releaseStart = now + PREVIEW_ATTACK_TIME + PREVIEW_SUSTAIN_TIME;
-  const endTime = releaseStart + PREVIEW_RELEASE_TIME;
 
   oscillator.setPeriodicWave(wave);
   oscillator.frequency.setValueAtTime(freq, now);
 
+  // Sustained tone with a soft attack; held until the user clicks to stop.
   gainNode.gain.setValueAtTime(PREVIEW_MIN_GAIN, now);
   gainNode.gain.exponentialRampToValueAtTime(PREVIEW_PEAK_GAIN, now + PREVIEW_ATTACK_TIME);
-  gainNode.gain.setValueAtTime(PREVIEW_PEAK_GAIN, releaseStart);
-  gainNode.gain.exponentialRampToValueAtTime(PREVIEW_MIN_GAIN, endTime);
 
   oscillator.connect(gainNode);
   gainNode.connect(context.destination);
 
   oscillator.start(now);
-  oscillator.stop(endTime);
 
-  activePreview = { oscillator, gainNode };
+  if (element) element.classList.add("playing");
+  activePreview = { oscillator, gainNode, element };
   oscillator.onended = () => {
-    if (activePreview && activePreview.oscillator === oscillator) activePreview = null;
+    if (activePreview && activePreview.oscillator === oscillator) {
+      if (activePreview.element) activePreview.element.classList.remove("playing");
+      activePreview = null;
+    }
   };
 }
 
@@ -630,6 +642,7 @@ reactivitySlider.addEventListener("input", (event) => {
 refPitchSelect.addEventListener("change", (event) => {
   referencePitch = Number(event.target.value);
   localStorage.setItem(STORAGE_KEYS.referencePitch, String(referencePitch));
+  stopActivePreview();
   updateStringsList();
   if (isRunning) resetDisplay();
 });
@@ -645,9 +658,35 @@ if (capoSelect) {
   capoSelect.addEventListener("change", (event) => {
     applyCapo(event.target.value);
     localStorage.setItem(STORAGE_KEYS.capo, String(capoSemitones));
+    stopActivePreview();
     resetStringLock();
     updateStringsList();
     if (isRunning) resetDisplay();
+  });
+}
+
+function applyTheme(theme) {
+  const next = theme === "light" ? "light" : "dark";
+  if (next === "dark") {
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    document.documentElement.setAttribute("data-theme", "light");
+  }
+  if (themeToggleBtn) {
+    themeToggleBtn.textContent = next === "light" ? "☀️" : "🌙";
+    themeToggleBtn.setAttribute("aria-label",
+      next === "light" ? "Switch to dark theme" : "Switch to light theme");
+  }
+  // Redraw history so any theme-dependent rendering refreshes.
+  drawHistory();
+}
+
+if (themeToggleBtn) {
+  themeToggleBtn.addEventListener("click", () => {
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const next = isLight ? "dark" : "light";
+    applyTheme(next);
+    localStorage.setItem(STORAGE_KEYS.theme, next);
   });
 }
 
@@ -714,6 +753,14 @@ window.addEventListener("resize", () => {
   const savedHaptic = localStorage.getItem(STORAGE_KEYS.haptic);
   if (savedHaptic != null) hapticEnabled = savedHaptic === "1";
   if (hapticToggle) hapticToggle.checked = hapticEnabled;
+
+  // Theme: respect saved preference, else prefers-color-scheme, else dark.
+  let savedTheme = localStorage.getItem(STORAGE_KEYS.theme);
+  if (!savedTheme) {
+    savedTheme = window.matchMedia &&
+      window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+  }
+  applyTheme(savedTheme);
 
   updateStringsList();
 })();

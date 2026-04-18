@@ -19,6 +19,39 @@
   --needle-transition-duration: 0.15s;
 }
 
+[data-theme="light"] {
+  --bg: #f5f6fa;
+  --surface: #ffffff;
+  --surface2: #eef0f7;
+  --accent: #d8344e;
+  --green: #00a37a;
+  --yellow: #c98010;
+  --text: #1a1a2e;
+  --muted: #5b6075;
+  --shadow: 0 8px 32px rgba(20, 20, 50, 0.12);
+}
+[data-theme="light"] .tuner-meter,
+[data-theme="light"] .card {
+  border-color: rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .history-canvas,
+[data-theme="light"] select,
+[data-theme="light"] .strings-grid li {
+  border-color: rgba(0, 0, 0, 0.1);
+}
+[data-theme="light"] .gauge-svg path[stroke="#2a2a4a"] {
+  stroke: #d2d6e3;
+}
+[data-theme="light"] #needle line {
+  stroke: #1a1a2e;
+}
+[data-theme="light"] #needle circle:first-of-type {
+  fill: #1a1a2e;
+}
+[data-theme="light"] #needle circle:last-of-type {
+  fill: #ffffff;
+}
+
 html, body {
   height: 100%;
   background: var(--bg);
@@ -62,7 +95,29 @@ body {
 /* Header */
 header {
   text-align: center;
+  position: relative;
+  width: 100%;
+  max-width: 600px;
 }
+
+.theme-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 50%;
+  width: 2.4rem;
+  height: 2.4rem;
+  font-size: 1.1rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, transform 0.1s;
+}
+.theme-toggle:hover { transform: translateY(-1px); }
 
 header h1 {
   font-size: 2.4rem;
@@ -157,6 +212,17 @@ select:focus { outline: 2px solid var(--accent); }
 .note-button.active {
   border-color: var(--green);
   box-shadow: 0 4px 14px rgba(0, 212, 160, 0.3);
+}
+
+.note-button.playing {
+  border-color: var(--accent);
+  background: rgba(233, 69, 96, 0.12);
+  box-shadow: 0 0 0 2px rgba(233, 69, 96, 0.25), 0 4px 14px rgba(233, 69, 96, 0.25);
+}
+.note-button.playing .string-note::after {
+  content: " ▶";
+  font-size: 0.7em;
+  color: var(--accent);
 }
 
 .strings-grid li:focus-visible {
@@ -436,6 +502,14 @@ footer {
 }
 
 /* Responsive */
+@media (max-width: 480px) {
+  body { padding: 1rem 0.75rem 1.5rem; gap: 1rem; }
+  .card { padding: 1rem; }
+  .tuner-meter { padding: 1.1rem 1rem 1rem; }
+  .strings-grid { gap: 0.4rem; }
+  .strings-grid li { flex: 1 1 calc(33.333% - 0.4rem); min-width: 0; }
+}
+
 @media (max-width: 420px) {
   header h1 { font-size: 1.8rem; }
   #note-display { font-size: 3.2rem; }
