@@ -491,8 +491,48 @@ select:focus { outline: 2px solid var(--accent); }
 }
 
 .tuner-controls {
-  display: grid;
-  gap: 0.8rem;
+  display: block;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  padding-top: 0.6rem;
+}
+.tuner-controls > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.4rem 0;
+  user-select: none;
+}
+.tuner-controls > summary::-webkit-details-marker { display: none; }
+.tuner-controls > summary::after {
+  content: " ▾";
+  display: inline;
+  transition: transform 0.15s;
+}
+.tuner-controls[open] > summary::after { content: " ▴"; }
+.tuner-controls > .mode-control,
+.tuner-controls > .noise-gate-control,
+.tuner-controls > .reactivity-control,
+.tuner-controls > .ref-pitch-control,
+.tuner-controls > .haptic-control,
+.tuner-controls > .capo-control {
+  margin-top: 0.7rem;
+}
+
+.setup-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.setup-actions-status {
+  font-size: 0.75rem;
+  color: var(--green);
+  min-height: 1em;
 }
 
 .mode-control label,

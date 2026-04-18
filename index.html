@@ -122,7 +122,8 @@
       <canvas id="history-canvas" class="history-canvas" width="560" height="60"
               aria-label="Recent tuning history" role="img"></canvas>
 
-      <div class="tuner-controls">
+      <details class="tuner-controls" id="tuner-controls">
+        <summary>⚙ Advanced settings</summary>
         <div class="mode-control">
           <label for="mode-select">Response Mode</label>
           <select id="mode-select" aria-label="Tuner response mode">
@@ -205,7 +206,7 @@
             <option value="12">12th fret (+12)</option>
           </select>
         </div>
-      </div>
+      </details>
 
       <div id="tuner-status" class="tuner-status" aria-live="polite">Press Start to begin</div>
       <p id="tuner-hint" class="tuner-hint">
@@ -217,6 +218,12 @@
 
     <!-- Start / Stop button -->
     <button id="start-btn" class="btn-start" aria-pressed="false">Start Tuner</button>
+
+    <div class="setup-actions">
+      <button id="share-btn" type="button" class="link-btn">🔗 Share my setup</button>
+      <button id="reset-btn" type="button" class="link-btn">↺ Reset to defaults</button>
+      <span id="setup-actions-status" class="setup-actions-status" role="status" aria-live="polite"></span>
+    </div>
 
   </main>
 

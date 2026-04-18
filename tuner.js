@@ -121,6 +121,9 @@ const newTuningBase = document.getElementById("new-tuning-base");
 const newTuningStrings = document.getElementById("new-tuning-strings");
 const newTuningError = document.getElementById("new-tuning-error");
 const addTuningBtn = document.getElementById("add-tuning-btn");
+const shareBtn = document.getElementById("share-btn");
+const resetBtn = document.getElementById("reset-btn");
+const setupActionsStatus = document.getElementById("setup-actions-status");
 
 // Instrument selector is populated dynamically in init() via renderInstrumentSelect(),
 // which merges built-in INSTRUMENTS with any saved custom tunings.
@@ -825,7 +828,7 @@ function parseTuningStrings(text) {
   if (!parts.length) throw new Error("Add at least one string.");
   if (parts.length > 12) throw new Error("Too many strings (max 12).");
   return parts.map((p, i) => {
-    const m = p.match(/^([A-Ga-g][#b]?-?\d):\s*([0-9]+(?:\.[0-9]+)?)$/);
+    const m = p.match(/^([A-Ga-g][#b]?-?\d+):\s*([0-9]+(?:\.[0-9]+)?)$/);
     if (!m) throw new Error(`String ${i + 1} ("${p}") must look like NOTE:HZ, e.g. "E2:82.41".`);
     const freq = Number(m[2]);
     if (!Number.isFinite(freq) || freq < 16 || freq > 5000) {
@@ -876,7 +879,9 @@ if (addTuningBtn) {
       showTuningError(err.message);
       return;
     }
-    const id = "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const id = (typeof crypto !== "undefined" && crypto.randomUUID)
+      ? "t" + crypto.randomUUID()
+      : "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     customTunings[id] = { label: name, baseInstrument: base, strings };
     saveCustomTunings();
     renderTuningsList();
@@ -891,6 +896,116 @@ function showTuningError(msg) {
   if (!newTuningError) return;
   newTuningError.textContent = msg;
   newTuningError.hidden = false;
+}
+
+// --- Share / Reset ---
+function setActionStatus(msg, isError) {
+  if (!setupActionsStatus) return;
+  setupActionsStatus.textContent = msg || "";
+  setupActionsStatus.style.color = isError ? "var(--accent)" : "var(--green)";
+  if (msg) {
+    clearTimeout(setActionStatus._t);
+    setActionStatus._t = setTimeout(() => {
+      setupActionsStatus.textContent = "";
+    }, 2500);
+  }
+}
+
+function buildShareUrl() {
+  const params = new URLSearchParams();
+  // Skip custom: tunings (they aren't portable across browsers).
+  if (!currentInstrument.startsWith(CUSTOM_KEY_PREFIX) && currentInstrument !== "guitar") {
+    params.set("inst", currentInstrument);
+  }
+  if (capoSemitones > 0) params.set("capo", String(capoSemitones));
+  if (referencePitch !== DEFAULT_REFERENCE_PITCH) params.set("pitch", String(referencePitch));
+  if (mode !== DEFAULT_MODE) params.set("mode", mode);
+  if (mode === "custom") {
+    params.set("react", String(reactivity));
+    params.set("ng", String(noiseGate));
+  }
+  const url = new URL(window.location.href);
+  url.search = params.toString();
+  url.hash = "";
+  return url.toString();
+}
+
+if (shareBtn) {
+  shareBtn.addEventListener("click", async () => {
+    const url = buildShareUrl();
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(url);
+        setActionStatus("Link copied to clipboard ✓");
+      } else {
+        // Fallback: show in a prompt for manual copy.
+        window.prompt("Copy this link:", url);
+        setActionStatus("Link ready ✓");
+      }
+    } catch (_) {
+      window.prompt("Copy this link:", url);
+      setActionStatus("Link ready ✓");
+    }
+  });
+}
+
+if (resetBtn) {
+  resetBtn.addEventListener("click", () => {
+    const ok = window.confirm(
+      "Reset all settings to defaults? This will also delete your custom tunings."
+    );
+    if (!ok) return;
+    Object.values(STORAGE_KEYS).forEach((k) => localStorage.removeItem(k));
+    // Clear the URL of any params then reload.
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.hash = "";
+    window.location.replace(url.toString());
+  });
+}
+
+// Apply settings from URL query params on load. Returns true if any were applied,
+// so the caller can save them to localStorage.
+function applySettingsFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  let applied = false;
+
+  const inst = params.get("inst");
+  if (inst && getInstrumentDef(inst)) {
+    currentInstrument = inst;
+    if (instrumentSelect) instrumentSelect.value = inst;
+    localStorage.setItem(STORAGE_KEYS.instrument, inst);
+    applied = true;
+  }
+  const capo = params.get("capo");
+  if (capo != null && /^\d+$/.test(capo)) {
+    applyCapo(capo);
+    localStorage.setItem(STORAGE_KEYS.capo, String(capoSemitones));
+    applied = true;
+  }
+  const pitch = params.get("pitch");
+  if (pitch != null && /^\d+(\.\d+)?$/.test(pitch)) {
+    applyReferencePitch(pitch);
+    localStorage.setItem(STORAGE_KEYS.referencePitch, String(referencePitch));
+    applied = true;
+  }
+  const m = params.get("mode");
+  if (m && (MODE_PRESETS[m] || m === "custom")) {
+    if (m === "custom") {
+      const r = params.get("react");
+      const ng = params.get("ng");
+      if (r != null && /^\d+$/.test(r)) applyReactivity(r);
+      if (ng != null && /^\d+$/.test(ng)) applyNoiseGate(ng);
+      applyMode("custom");
+      localStorage.setItem(STORAGE_KEYS.reactivity, String(reactivity));
+      localStorage.setItem(STORAGE_KEYS.noiseGate, String(noiseGate));
+    } else {
+      applyMode(m);
+    }
+    localStorage.setItem(STORAGE_KEYS.mode, mode);
+    applied = true;
+  }
+  return applied;
 }
 
 // --- Keyboard shortcuts ---
@@ -967,10 +1082,12 @@ window.addEventListener("resize", () => {
   // Theme: respect saved preference, else prefers-color-scheme, else dark.
   let savedTheme = localStorage.getItem(STORAGE_KEYS.theme);
   if (!savedTheme) {
-    savedTheme = window.matchMedia &&
-      window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    savedTheme = window.matchMedia?.("(prefers-color-scheme: light)")?.matches ? "light" : "dark";
   }
   applyTheme(savedTheme);
+
+  // URL params override stored prefs, and persist themselves.
+  applySettingsFromUrl();
 
   updateStringsList();
 })();
