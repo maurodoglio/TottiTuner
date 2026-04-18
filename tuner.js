@@ -12,8 +12,6 @@ const PREVIEW_PEAK_GAIN = 0.14;
 // Must be greater than 0 for exponential ramps.
 const PREVIEW_MIN_GAIN = 0.0001;
 const PREVIEW_ATTACK_TIME = 0.02;
-const PREVIEW_SUSTAIN_TIME = 1.0;
-const PREVIEW_RELEASE_TIME = 0.4;
 // Short fade when interrupting a preview mid-playback, to avoid clicks.
 const PREVIEW_STOP_FADE_TIME = 0.02;
 const DEFAULT_NOISE_GATE = 50;
@@ -21,6 +19,12 @@ const DEFAULT_REACTIVITY = 60;
 const DEFAULT_MODE = "balanced";
 const DEFAULT_REFERENCE_PITCH = 440;
 const PITCH_HOLD_MS = 280;
+// String auto-lock: must see a different string be the closest for this long
+// before switching the highlight. Prevents flicker between adjacent strings.
+const STRING_LOCK_MS = 500;
+// If detected pitch is farther than this from every string, fall back to
+// closest-semitone display (user is probably playing something else).
+const STRING_FALLBACK_CENTS = 700;
 const MAX_SAMPLE_INTERVAL_MS = 130;
 const MIN_SAMPLE_INTERVAL_MS = 25;
 const MIN_RMS_THRESHOLD = 0.004;
@@ -40,7 +44,13 @@ const STORAGE_KEYS = {
   reactivity: "tottiTuner_reactivity",
   noiseGate: "tottiTuner_noiseGate",
   referencePitch: "tottiTuner_referencePitch",
+  haptic: "tottiTuner_haptic",
+  capo: "tottiTuner_capo",
+  theme: "tottiTuner_theme",
+  customTunings: "tottiTuner_customTunings",
 };
+
+const CUSTOM_KEY_PREFIX = "custom:";
 
 // --- Audio state ---
 let audioContext = null;
@@ -53,6 +63,23 @@ let activePreview = null; // { oscillator, gainNode }
 let smoothedFrequency = null;
 let lastAnalysisTime = 0;
 let lastStablePitchTime = 0;
+// Auto-string-lock state
+let lockedStringIdx = null;
+let candidateStringIdx = null;
+let candidateSinceMs = 0;
+// Pulse the meter briefly when transitioning into the in-tune zone.
+const IN_TUNE_PULSE_MS = 350;
+let wasInTune = false;
+let hapticEnabled = true;
+// Throttle screen-reader announcements so the live region isn't spammed.
+const ARIA_ANNOUNCE_MIN_MS = 1500;
+let lastAriaAnnounceMs = 0;
+let lastAriaAnnouncedNote = "";
+
+// Tuning history strip chart (ring buffer of {cents, valid}).
+const HISTORY_LEN = 140;
+const historyBuffer = new Array(HISTORY_LEN).fill(null);
+let historyHead = 0; // index where next sample will be written
 
 // --- UI state ---
 let currentInstrument = localStorage.getItem(STORAGE_KEYS.instrument) || "guitar";
@@ -60,6 +87,7 @@ let mode = DEFAULT_MODE;
 let noiseGate = DEFAULT_NOISE_GATE;
 let reactivity = DEFAULT_REACTIVITY;
 let referencePitch = DEFAULT_REFERENCE_PITCH;
+let capoSemitones = 0;
 
 // --- DOM refs ---
 const startBtn = document.getElementById("start-btn");
@@ -77,38 +105,127 @@ const noiseGateValue = document.getElementById("noise-gate-value");
 const reactivitySlider = document.getElementById("reactivity-slider");
 const reactivityValue = document.getElementById("reactivity-value");
 const refPitchSelect = document.getElementById("ref-pitch-select");
+const tunerErrorHelp = document.getElementById("tuner-error-help");
+const tunerHint = document.getElementById("tuner-hint");
+const hapticToggle = document.getElementById("haptic-toggle");
+const tunerAnnouncer = document.getElementById("tuner-announcer");
+const historyCanvas = document.getElementById("history-canvas");
+const historyCtx = historyCanvas ? historyCanvas.getContext("2d") : null;
+const capoSelect = document.getElementById("capo-select");
+const themeToggleBtn = document.getElementById("theme-toggle");
+const manageTuningsBtn = document.getElementById("manage-tunings-btn");
+const tuningsDialog = document.getElementById("tunings-dialog");
+const tuningsList = document.getElementById("tunings-list");
+const newTuningName = document.getElementById("new-tuning-name");
+const newTuningBase = document.getElementById("new-tuning-base");
+const newTuningStrings = document.getElementById("new-tuning-strings");
+const newTuningError = document.getElementById("new-tuning-error");
+const addTuningBtn = document.getElementById("add-tuning-btn");
+const shareBtn = document.getElementById("share-btn");
+const resetBtn = document.getElementById("reset-btn");
+const setupActionsStatus = document.getElementById("setup-actions-status");
 
-// Populate instrument selector, restoring saved selection
-Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
-  const opt = document.createElement("option");
-  opt.value = key;
-  opt.textContent = inst.label;
-  if (key === currentInstrument) opt.selected = true;
-  instrumentSelect.appendChild(opt);
-});
+// Instrument selector is populated dynamically in init() via renderInstrumentSelect(),
+// which merges built-in INSTRUMENTS with any saved custom tunings.
+
+// --- Custom tunings ---
+let customTunings = {}; // { id: { label, baseInstrument, strings: [{note,freq}] } }
+
+function loadCustomTunings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.customTunings);
+    customTunings = raw ? (JSON.parse(raw) || {}) : {};
+  } catch (_) {
+    customTunings = {};
+  }
+}
+
+function saveCustomTunings() {
+  localStorage.setItem(STORAGE_KEYS.customTunings, JSON.stringify(customTunings));
+}
+
+// Returns the tuning definition for a key, looking up built-in instruments and
+// custom tunings (prefixed with "custom:"). Always has { label, harmonics, strings }.
+function getInstrumentDef(key) {
+  if (key && key.startsWith(CUSTOM_KEY_PREFIX)) {
+    const id = key.slice(CUSTOM_KEY_PREFIX.length);
+    const t = customTunings[id];
+    if (!t) return null;
+    const base = INSTRUMENTS[t.baseInstrument] || INSTRUMENTS.guitar;
+    return { label: t.label, harmonics: base.harmonics, strings: t.strings };
+  }
+  return INSTRUMENTS[key] || null;
+}
+
+function currentDef() {
+  return getInstrumentDef(currentInstrument) || INSTRUMENTS.guitar;
+}
+
+function renderInstrumentSelect() {
+  const previous = currentInstrument;
+  instrumentSelect.innerHTML = "";
+
+  const builtinGroup = document.createElement("optgroup");
+  builtinGroup.label = "Built-in";
+  Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = inst.label;
+    builtinGroup.appendChild(opt);
+  });
+  instrumentSelect.appendChild(builtinGroup);
+
+  const customIds = Object.keys(customTunings);
+  if (customIds.length) {
+    const customGroup = document.createElement("optgroup");
+    customGroup.label = "Custom";
+    customIds.forEach((id) => {
+      const opt = document.createElement("option");
+      opt.value = CUSTOM_KEY_PREFIX + id;
+      opt.textContent = "★ " + customTunings[id].label;
+      customGroup.appendChild(opt);
+    });
+    instrumentSelect.appendChild(customGroup);
+  }
+
+  // Restore selection (or fall back to guitar if previous tuning no longer exists).
+  if (getInstrumentDef(previous)) {
+    instrumentSelect.value = previous;
+  } else {
+    currentInstrument = "guitar";
+    instrumentSelect.value = "guitar";
+    localStorage.setItem(STORAGE_KEYS.instrument, currentInstrument);
+  }
+}
 
 // INSTRUMENTS frequencies are defined at A4=440. Scale proportionally for other reference pitches.
+// Also apply the capo (transposes every string up by N semitones).
 function scaledFreq(baseFreq) {
-  return baseFreq * (referencePitch / 440);
+  const capoFactor = Math.pow(2, capoSemitones / 12);
+  return baseFreq * (referencePitch / 440) * capoFactor;
 }
 
 function updateStringsList() {
   stringsList.innerHTML = "";
-  INSTRUMENTS[currentInstrument].strings.forEach(({ note, freq }) => {
+  currentDef().strings.forEach(({ note, freq }) => {
     const adjustedFreq = scaledFreq(freq);
+    const midi = noteFromFrequency(adjustedFreq, referencePitch);
+    // When a capo is applied, the sounding note differs from the open-string label.
+    const displayNote = capoSemitones > 0 ? noteName(midi) : note;
     const li = document.createElement("li");
     li.tabIndex = 0;
     li.setAttribute("role", "button");
-    li.setAttribute("aria-label", `Play ${note} at ${adjustedFreq.toFixed(2)} Hz`);
+    li.setAttribute("aria-label", `Toggle reference tone for ${displayNote} (${adjustedFreq.toFixed(2)} Hz)`);
     li.classList.add("note-button");
     // Store MIDI note number for active-string highlighting comparison
-    li.dataset.midi = String(noteFromFrequency(adjustedFreq, referencePitch));
-    li.innerHTML = `<span class="string-note">${note}</span><span class="string-freq">${adjustedFreq.toFixed(2)} Hz</span>`;
-    li.addEventListener("click", () => playNotePreview(adjustedFreq));
+    li.dataset.midi = String(midi);
+    li.dataset.noteLabel = displayNote;
+    li.innerHTML = `<span class="string-note">${displayNote}</span><span class="string-freq">${adjustedFreq.toFixed(2)} Hz</span>`;
+    li.addEventListener("click", () => togglePreview(adjustedFreq, li));
     li.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
-      playNotePreview(adjustedFreq);
+      togglePreview(adjustedFreq, li);
     });
     stringsList.appendChild(li);
   });
@@ -117,6 +234,8 @@ function updateStringsList() {
 instrumentSelect.addEventListener("change", () => {
   currentInstrument = instrumentSelect.value;
   localStorage.setItem(STORAGE_KEYS.instrument, currentInstrument);
+  stopActivePreview();
+  resetStringLock();
   updateStringsList();
   resetDisplay();
 });
@@ -181,6 +300,12 @@ function applyReferencePitch(value) {
     : String(DEFAULT_REFERENCE_PITCH);
 }
 
+function applyCapo(value) {
+  const parsed = Number(value);
+  capoSemitones = Number.isFinite(parsed) ? Math.max(0, Math.min(12, Math.round(parsed))) : 0;
+  if (capoSelect) capoSelect.value = String(capoSemitones);
+}
+
 function clearActiveStrings() {
   stringsList.querySelectorAll(".note-button.active").forEach(el => el.classList.remove("active"));
 }
@@ -191,9 +316,12 @@ function resetDisplay() {
   centsDisplay.textContent = "0¢";
   setNeedle(0);
   clearActiveStrings();
+  clearHistory();
   tunerStatus.textContent = "Waiting for sound...";
   tunerStatus.className = "tuner-status";
   tunerMeter.className = "tuner-meter";
+  wasInTune = false;
+  lastAriaAnnouncedNote = "";
 }
 
 function setNeedle(cents) {
@@ -203,42 +331,190 @@ function setNeedle(cents) {
   needle.style.transform = `rotate(${deg}deg)`;
 }
 
-function highlightActiveString(noteNum, cents) {
-  const midiStr = String(noteNum);
-  stringsList.querySelectorAll(".note-button").forEach(li => {
-    li.classList.toggle("active", li.dataset.midi === midiStr && Math.abs(cents) <= 15);
+function pushHistorySample(cents) {
+  historyBuffer[historyHead] = { cents };
+  historyHead = (historyHead + 1) % HISTORY_LEN;
+}
+
+function clearHistory() {
+  for (let i = 0; i < HISTORY_LEN; i++) historyBuffer[i] = null;
+  historyHead = 0;
+  drawHistory();
+}
+
+function colorForCents(absCents) {
+  if (absCents <= 5) return "#00d4a0"; // green
+  if (absCents <= 15) return "#f5a623"; // yellow
+  return "#e94560"; // red
+}
+
+function drawHistory() {
+  if (!historyCtx) return;
+  // Match canvas pixel size to its CSS size for crisp rendering.
+  const cssW = historyCanvas.clientWidth || historyCanvas.width;
+  const cssH = historyCanvas.clientHeight || historyCanvas.height;
+  const dpr = window.devicePixelRatio || 1;
+  const targetW = Math.round(cssW * dpr);
+  const targetH = Math.round(cssH * dpr);
+  if (historyCanvas.width !== targetW) historyCanvas.width = targetW;
+  if (historyCanvas.height !== targetH) historyCanvas.height = targetH;
+
+  const w = historyCanvas.width;
+  const h = historyCanvas.height;
+  historyCtx.clearRect(0, 0, w, h);
+
+  // Center line
+  historyCtx.strokeStyle = "rgba(0, 212, 160, 0.45)";
+  historyCtx.lineWidth = Math.max(1, dpr);
+  historyCtx.beginPath();
+  historyCtx.moveTo(0, h / 2);
+  historyCtx.lineTo(w, h / 2);
+  historyCtx.stroke();
+
+  // ±15¢ guide band
+  const bandRange = 15;
+  const halfBand = (bandRange / 50) * (h / 2);
+  historyCtx.fillStyle = "rgba(245, 166, 35, 0.08)";
+  historyCtx.fillRect(0, h / 2 - halfBand, w, halfBand * 2);
+  // ±5¢ in-tune band
+  const goodBand = (5 / 50) * (h / 2);
+  historyCtx.fillStyle = "rgba(0, 212, 160, 0.12)";
+  historyCtx.fillRect(0, h / 2 - goodBand, w, goodBand * 2);
+
+  // Sample dots, oldest on the left, newest on the right.
+  const dotR = Math.max(1.2, 1.6 * dpr);
+  for (let i = 0; i < HISTORY_LEN; i++) {
+    const sample = historyBuffer[(historyHead + i) % HISTORY_LEN];
+    if (!sample) continue;
+    const clamped = Math.max(-50, Math.min(50, sample.cents));
+    const x = (i / (HISTORY_LEN - 1)) * w;
+    const y = h / 2 - (clamped / 50) * (h / 2 - dotR);
+    historyCtx.fillStyle = colorForCents(Math.abs(sample.cents));
+    historyCtx.beginPath();
+    historyCtx.arc(x, y, dotR, 0, Math.PI * 2);
+    historyCtx.fill();
+  }
+}
+
+function resetStringLock() {
+  lockedStringIdx = null;
+  candidateStringIdx = null;
+  candidateSinceMs = 0;
+}
+
+// Returns the index of the auto-locked string, or null if no string is close enough.
+function pickLockedStringIdx(frequency, timestamp) {
+  const strings = currentDef().strings;
+  let bestIdx = 0;
+  let bestAbs = Infinity;
+  for (let i = 0; i < strings.length; i++) {
+    const targetFreq = scaledFreq(strings[i].freq);
+    const cents = Math.abs(1200 * Math.log2(frequency / targetFreq));
+    if (cents < bestAbs) {
+      bestAbs = cents;
+      bestIdx = i;
+    }
+  }
+  if (bestAbs > STRING_FALLBACK_CENTS) return null;
+
+  if (lockedStringIdx === null) {
+    lockedStringIdx = bestIdx;
+    candidateStringIdx = bestIdx;
+    candidateSinceMs = timestamp;
+  } else if (bestIdx === lockedStringIdx) {
+    candidateStringIdx = bestIdx;
+    candidateSinceMs = timestamp;
+  } else if (candidateStringIdx !== bestIdx) {
+    candidateStringIdx = bestIdx;
+    candidateSinceMs = timestamp;
+  } else if (timestamp - candidateSinceMs >= STRING_LOCK_MS) {
+    lockedStringIdx = bestIdx;
+  }
+  return lockedStringIdx;
+}
+
+function highlightActiveStringByIdx(idx) {
+  const targetMidi = idx == null ? null : stringsList.children[idx]?.dataset.midi;
+  stringsList.querySelectorAll(".note-button").forEach((li, i) => {
+    li.classList.toggle("active", targetMidi != null && i === idx);
   });
 }
 
-function updateTunerUI(frequency) {
-  const noteNum = noteFromFrequency(frequency, referencePitch);
-  const cents = centsOffFromPitch(frequency, noteNum, referencePitch);
-  const name = noteName(noteNum);
+function updateTunerUI(frequency, timestamp) {
+  const lockedIdx = pickLockedStringIdx(frequency, timestamp);
+  let displayName;
+  let displayCents;
 
-  noteDisplay.textContent = name;
+  if (lockedIdx !== null) {
+    const target = currentDef().strings[lockedIdx];
+    const targetFreq = scaledFreq(target.freq);
+    const rawCents = 1200 * Math.log2(frequency / targetFreq);
+    // Clamp displayed cents so wildly out-of-tune readings don't show 1500¢.
+    displayCents = Math.max(-99, Math.min(99, Math.round(rawCents)));
+    // Read the capo-aware label from the rendered string button if available,
+    // falling back to the static note label.
+    const li = stringsList.children[lockedIdx];
+    displayName = (li && li.dataset && li.dataset.noteLabel) || target.note;
+  } else {
+    // Fallback: show closest semitone (original behavior).
+    const noteNum = noteFromFrequency(frequency, referencePitch);
+    displayCents = centsOffFromPitch(frequency, noteNum, referencePitch);
+    displayName = noteName(noteNum);
+  }
+
+  noteDisplay.textContent = displayName;
   freqDisplay.textContent = `${frequency.toFixed(1)} Hz`;
-  centsDisplay.textContent = `${cents >= 0 ? "+" : ""}${cents}¢`;
+  centsDisplay.textContent = `${displayCents >= 0 ? "+" : ""}${displayCents}¢`;
 
-  setNeedle(cents);
-  highlightActiveString(noteNum, cents);
+  setNeedle(displayCents);
+  highlightActiveStringByIdx(lockedIdx);
+  pushHistorySample(displayCents);
+  drawHistory();
 
-  const absCents = Math.abs(cents);
-  if (absCents <= 5) {
+  const absCents = Math.abs(displayCents);
+  const inTune = absCents <= 5;
+  if (inTune) {
     tunerStatus.textContent = "In Tune ✓";
     tunerStatus.className = "tuner-status in-tune";
     tunerMeter.className = "tuner-meter in-tune";
   } else if (absCents <= 15) {
-    tunerStatus.textContent = cents < 0 ? "Slightly Flat ↓" : "Slightly Sharp ↑";
+    tunerStatus.textContent = displayCents < 0 ? "Slightly Flat ↓" : "Slightly Sharp ↑";
     tunerStatus.className = "tuner-status slightly-off";
     tunerMeter.className = "tuner-meter slightly-off";
   } else {
-    tunerStatus.textContent = cents < 0 ? "Flat ↓" : "Sharp ↑";
+    tunerStatus.textContent = displayCents < 0 ? "Flat ↓" : "Sharp ↑";
     tunerStatus.className = "tuner-status out-of-tune";
     tunerMeter.className = "tuner-meter out-of-tune";
+  }
+
+  // Positive feedback on transition into the in-tune zone.
+  if (inTune && !wasInTune) {
+    tunerMeter.classList.add("pulse");
+    setTimeout(() => tunerMeter.classList.remove("pulse"), IN_TUNE_PULSE_MS);
+    if (hapticEnabled && typeof navigator.vibrate === "function") {
+      try { navigator.vibrate(30); } catch (_) { /* ignore */ }
+    }
+  }
+  wasInTune = inTune;
+
+  // Throttled screen-reader announcement.
+  if (tunerAnnouncer) {
+    const summary = inTune
+      ? `${displayName} in tune`
+      : `${displayName}, ${Math.abs(displayCents)} cents ${displayCents < 0 ? "flat" : "sharp"}`;
+    if (
+      summary !== lastAriaAnnouncedNote &&
+      timestamp - lastAriaAnnounceMs >= ARIA_ANNOUNCE_MIN_MS
+    ) {
+      tunerAnnouncer.textContent = summary;
+      lastAriaAnnouncedNote = summary;
+      lastAriaAnnounceMs = timestamp;
+    }
   }
 }
 
 function processAudio(timestamp) {
+  if (timestamp == null) timestamp = performance.now();
   if (timestamp - lastAnalysisTime < getSampleIntervalMs()) {
     animFrame = requestAnimationFrame(processAudio);
     return;
@@ -256,9 +532,10 @@ function processAudio(timestamp) {
       smoothedFrequency += (frequency - smoothedFrequency) * getSmoothingAlpha();
     }
     lastStablePitchTime = timestamp;
-    updateTunerUI(smoothedFrequency);
+    updateTunerUI(smoothedFrequency, timestamp);
   } else if (timestamp - lastStablePitchTime > PITCH_HOLD_MS) {
     smoothedFrequency = null;
+    resetStringLock();
     resetDisplay();
   }
 
@@ -274,22 +551,33 @@ function getPreviewAudioContext() {
 
 function stopActivePreview() {
   if (!activePreview) return;
-  const { oscillator, gainNode } = activePreview;
+  const { oscillator, gainNode, element } = activePreview;
   const now = previewAudioContext.currentTime;
   gainNode.gain.cancelScheduledValues(now);
   gainNode.gain.setValueAtTime(gainNode.gain.value, now);
   gainNode.gain.linearRampToValueAtTime(0, now + PREVIEW_STOP_FADE_TIME);
   try { oscillator.stop(now + PREVIEW_STOP_FADE_TIME); } catch (_) {}
+  if (element) element.classList.remove("playing");
   activePreview = null;
 }
 
-function playNotePreview(freq) {
+// Click-to-toggle a sustained reference tone. Clicking the playing string stops
+// it; clicking another string switches to it.
+function togglePreview(freq, element) {
+  if (activePreview && activePreview.element === element) {
+    stopActivePreview();
+    return;
+  }
+  playNotePreview(freq, element);
+}
+
+function playNotePreview(freq, element) {
   const context = getPreviewAudioContext();
   if (context.state === "suspended") context.resume();
 
   stopActivePreview();
 
-  const { harmonics } = INSTRUMENTS[currentInstrument];
+  const { harmonics } = currentDef();
   const real = new Float32Array(harmonics);
   const imag = new Float32Array(harmonics.length);
   const wave = context.createPeriodicWave(real, imag);
@@ -297,26 +585,26 @@ function playNotePreview(freq) {
   const oscillator = context.createOscillator();
   const gainNode = context.createGain();
   const now = context.currentTime;
-  const releaseStart = now + PREVIEW_ATTACK_TIME + PREVIEW_SUSTAIN_TIME;
-  const endTime = releaseStart + PREVIEW_RELEASE_TIME;
 
   oscillator.setPeriodicWave(wave);
   oscillator.frequency.setValueAtTime(freq, now);
 
+  // Sustained tone with a soft attack; held until the user clicks to stop.
   gainNode.gain.setValueAtTime(PREVIEW_MIN_GAIN, now);
   gainNode.gain.exponentialRampToValueAtTime(PREVIEW_PEAK_GAIN, now + PREVIEW_ATTACK_TIME);
-  gainNode.gain.setValueAtTime(PREVIEW_PEAK_GAIN, releaseStart);
-  gainNode.gain.exponentialRampToValueAtTime(PREVIEW_MIN_GAIN, endTime);
 
   oscillator.connect(gainNode);
   gainNode.connect(context.destination);
 
   oscillator.start(now);
-  oscillator.stop(endTime);
 
-  activePreview = { oscillator, gainNode };
+  if (element) element.classList.add("playing");
+  activePreview = { oscillator, gainNode, element };
   oscillator.onended = () => {
-    if (activePreview && activePreview.oscillator === oscillator) activePreview = null;
+    if (activePreview && activePreview.oscillator === oscillator) {
+      if (activePreview.element) activePreview.element.classList.remove("playing");
+      activePreview = null;
+    }
   };
 }
 
@@ -338,23 +626,43 @@ async function startTuner() {
     smoothedFrequency = null;
     lastAnalysisTime = performance.now() - getSampleIntervalMs();
     lastStablePitchTime = performance.now();
+    resetStringLock();
     isRunning = true;
     startBtn.textContent = "Stop Tuner";
     startBtn.classList.add("active");
     startBtn.setAttribute("aria-pressed", "true");
     tunerStatus.textContent = "Listening...";
+    tunerStatus.className = "tuner-status";
+    if (tunerErrorHelp) {
+      tunerErrorHelp.hidden = true;
+      tunerErrorHelp.textContent = "";
+    }
+    if (tunerHint) tunerHint.hidden = true;
     processAudio();
   } catch (err) {
+    let helpText = "";
     if (err.name === "InsecureContextError") {
       tunerStatus.textContent = "Use HTTPS (or localhost) to enable microphone";
+      helpText = "Browsers only allow microphone access on secure (HTTPS) pages or on localhost. Try opening this page over HTTPS.";
     } else if (err.name === "NotSupportedError") {
       tunerStatus.textContent = "Microphone is not supported in this browser";
+      helpText = "Try a recent version of Chrome, Firefox, Edge, or Safari.";
     } else if (err.name === "NotFoundError") {
       tunerStatus.textContent = "No microphone device found";
+      helpText = "Plug in or enable a microphone, then press Start again.";
+    } else if (err.name === "NotAllowedError" || err.name === "SecurityError") {
+      tunerStatus.textContent = "Microphone access denied";
+      helpText = "To re-enable: click the lock/permissions icon in your browser's address bar, allow microphone access for this site, then reload the page.";
     } else {
       tunerStatus.textContent = "Microphone access denied";
+      helpText = "Check your browser's microphone permissions for this site, then try again.";
     }
     tunerStatus.className = "tuner-status out-of-tune";
+    if (tunerErrorHelp) {
+      tunerErrorHelp.textContent = helpText;
+      tunerErrorHelp.hidden = !helpText;
+    }
+    if (tunerHint) tunerHint.hidden = true;
     console.error(err);
   }
 }
@@ -374,6 +682,7 @@ function stopTuner() {
   smoothedFrequency = null;
   lastAnalysisTime = 0;
   lastStablePitchTime = 0;
+  resetStringLock();
   previewAudioContext = null;
   isRunning = false;
   startBtn.textContent = "Start Tuner";
@@ -411,12 +720,343 @@ reactivitySlider.addEventListener("input", (event) => {
 refPitchSelect.addEventListener("change", (event) => {
   referencePitch = Number(event.target.value);
   localStorage.setItem(STORAGE_KEYS.referencePitch, String(referencePitch));
+  stopActivePreview();
   updateStringsList();
   if (isRunning) resetDisplay();
 });
 
+if (hapticToggle) {
+  hapticToggle.addEventListener("change", (event) => {
+    hapticEnabled = !!event.target.checked;
+    localStorage.setItem(STORAGE_KEYS.haptic, hapticEnabled ? "1" : "0");
+  });
+}
+
+if (capoSelect) {
+  capoSelect.addEventListener("change", (event) => {
+    applyCapo(event.target.value);
+    localStorage.setItem(STORAGE_KEYS.capo, String(capoSemitones));
+    stopActivePreview();
+    resetStringLock();
+    updateStringsList();
+    if (isRunning) resetDisplay();
+  });
+}
+
+function applyTheme(theme) {
+  const next = theme === "light" ? "light" : "dark";
+  if (next === "dark") {
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    document.documentElement.setAttribute("data-theme", "light");
+  }
+  if (themeToggleBtn) {
+    themeToggleBtn.textContent = next === "light" ? "☀️" : "🌙";
+    themeToggleBtn.setAttribute("aria-label",
+      next === "light" ? "Switch to dark theme" : "Switch to light theme");
+  }
+  // Redraw history so any theme-dependent rendering refreshes.
+  drawHistory();
+}
+
+if (themeToggleBtn) {
+  themeToggleBtn.addEventListener("click", () => {
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const next = isLight ? "dark" : "light";
+    applyTheme(next);
+    localStorage.setItem(STORAGE_KEYS.theme, next);
+  });
+}
+
+// --- Custom tunings dialog ---
+function renderTuningsList() {
+  if (!tuningsList) return;
+  tuningsList.innerHTML = "";
+  Object.entries(customTunings).forEach(([id, t]) => {
+    const row = document.createElement("div");
+    row.className = "tuning-row";
+    const meta = t.strings.map(s => `${s.note}:${s.freq}`).join(", ");
+    const info = document.createElement("div");
+    info.className = "tuning-info";
+    const nameEl = document.createElement("div");
+    nameEl.className = "tuning-name";
+    nameEl.textContent = t.label;
+    const metaEl = document.createElement("div");
+    metaEl.className = "tuning-meta";
+    metaEl.title = meta;
+    metaEl.textContent = meta;
+    info.appendChild(nameEl);
+    info.appendChild(metaEl);
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Delete";
+    del.addEventListener("click", () => {
+      delete customTunings[id];
+      saveCustomTunings();
+      renderTuningsList();
+      renderInstrumentSelect();
+      // If we just deleted the currently-selected one, switch to guitar.
+      if (currentInstrument === CUSTOM_KEY_PREFIX + id) {
+        currentInstrument = "guitar";
+        instrumentSelect.value = "guitar";
+        localStorage.setItem(STORAGE_KEYS.instrument, currentInstrument);
+        stopActivePreview();
+        resetStringLock();
+        updateStringsList();
+        resetDisplay();
+      }
+    });
+    row.appendChild(info);
+    row.appendChild(del);
+    tuningsList.appendChild(row);
+  });
+}
+
+function populateNewTuningBaseSelect() {
+  if (!newTuningBase) return;
+  newTuningBase.innerHTML = "";
+  Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = inst.label;
+    newTuningBase.appendChild(opt);
+  });
+}
+
+function parseTuningStrings(text) {
+  const parts = text.split(",").map(s => s.trim()).filter(Boolean);
+  if (!parts.length) throw new Error("Add at least one string.");
+  if (parts.length > 12) throw new Error("Too many strings (max 12).");
+  return parts.map((p, i) => {
+    const m = p.match(/^([A-Ga-g][#b]?-?\d+):\s*([0-9]+(?:\.[0-9]+)?)$/);
+    if (!m) throw new Error(`String ${i + 1} ("${p}") must look like NOTE:HZ, e.g. "E2:82.41".`);
+    const freq = Number(m[2]);
+    if (!Number.isFinite(freq) || freq < 16 || freq > 5000) {
+      throw new Error(`String ${i + 1}: frequency must be between 16 and 5000 Hz.`);
+    }
+    return { note: m[1].toUpperCase(), freq };
+  });
+}
+
+function openTuningsDialog() {
+  if (!tuningsDialog) return;
+  populateNewTuningBaseSelect();
+  renderTuningsList();
+  if (newTuningName) newTuningName.value = "";
+  if (newTuningStrings) newTuningStrings.value = "";
+  if (newTuningError) {
+    newTuningError.textContent = "";
+    newTuningError.hidden = true;
+  }
+  if (typeof tuningsDialog.showModal === "function") {
+    tuningsDialog.showModal();
+  } else {
+    tuningsDialog.setAttribute("open", "");
+  }
+}
+
+if (manageTuningsBtn) {
+  manageTuningsBtn.addEventListener("click", openTuningsDialog);
+}
+
+if (addTuningBtn) {
+  addTuningBtn.addEventListener("click", () => {
+    if (!newTuningName || !newTuningStrings || !newTuningBase) return;
+    const name = newTuningName.value.trim();
+    const base = newTuningBase.value;
+    if (!name) {
+      showTuningError("Please enter a name.");
+      return;
+    }
+    if (!INSTRUMENTS[base]) {
+      showTuningError("Pick a base instrument.");
+      return;
+    }
+    let strings;
+    try {
+      strings = parseTuningStrings(newTuningStrings.value);
+    } catch (err) {
+      showTuningError(err.message);
+      return;
+    }
+    const id = (typeof crypto !== "undefined" && crypto.randomUUID)
+      ? "t" + crypto.randomUUID()
+      : "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    customTunings[id] = { label: name, baseInstrument: base, strings };
+    saveCustomTunings();
+    renderTuningsList();
+    renderInstrumentSelect();
+    if (newTuningError) { newTuningError.textContent = ""; newTuningError.hidden = true; }
+    if (newTuningName) newTuningName.value = "";
+    if (newTuningStrings) newTuningStrings.value = "";
+  });
+}
+
+function showTuningError(msg) {
+  if (!newTuningError) return;
+  newTuningError.textContent = msg;
+  newTuningError.hidden = false;
+}
+
+// --- Share / Reset ---
+function setActionStatus(msg, isError) {
+  if (!setupActionsStatus) return;
+  setupActionsStatus.textContent = msg || "";
+  setupActionsStatus.style.color = isError ? "var(--accent)" : "var(--green)";
+  if (msg) {
+    clearTimeout(setActionStatus._t);
+    setActionStatus._t = setTimeout(() => {
+      setupActionsStatus.textContent = "";
+    }, 2500);
+  }
+}
+
+function buildShareUrl() {
+  const params = new URLSearchParams();
+  // Skip custom: tunings (they aren't portable across browsers).
+  if (!currentInstrument.startsWith(CUSTOM_KEY_PREFIX) && currentInstrument !== "guitar") {
+    params.set("inst", currentInstrument);
+  }
+  if (capoSemitones > 0) params.set("capo", String(capoSemitones));
+  if (referencePitch !== DEFAULT_REFERENCE_PITCH) params.set("pitch", String(referencePitch));
+  if (mode !== DEFAULT_MODE) params.set("mode", mode);
+  if (mode === "custom") {
+    params.set("react", String(reactivity));
+    params.set("ng", String(noiseGate));
+  }
+  const url = new URL(window.location.href);
+  url.search = params.toString();
+  url.hash = "";
+  return url.toString();
+}
+
+if (shareBtn) {
+  shareBtn.addEventListener("click", async () => {
+    const url = buildShareUrl();
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(url);
+        setActionStatus("Link copied to clipboard ✓");
+      } else {
+        // Fallback: show in a prompt for manual copy.
+        window.prompt("Copy this link:", url);
+        setActionStatus("Link ready ✓");
+      }
+    } catch (_) {
+      window.prompt("Copy this link:", url);
+      setActionStatus("Link ready ✓");
+    }
+  });
+}
+
+if (resetBtn) {
+  resetBtn.addEventListener("click", () => {
+    const ok = window.confirm(
+      "Reset all settings to defaults? This will also delete your custom tunings."
+    );
+    if (!ok) return;
+    Object.values(STORAGE_KEYS).forEach((k) => localStorage.removeItem(k));
+    // Clear the URL of any params then reload.
+    const url = new URL(window.location.href);
+    url.search = "";
+    url.hash = "";
+    window.location.replace(url.toString());
+  });
+}
+
+// Apply settings from URL query params on load. Returns true if any were applied,
+// so the caller can save them to localStorage.
+function applySettingsFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  let applied = false;
+
+  const inst = params.get("inst");
+  if (inst && getInstrumentDef(inst)) {
+    currentInstrument = inst;
+    if (instrumentSelect) instrumentSelect.value = inst;
+    localStorage.setItem(STORAGE_KEYS.instrument, inst);
+    applied = true;
+  }
+  const capo = params.get("capo");
+  if (capo != null && /^\d+$/.test(capo)) {
+    applyCapo(capo);
+    localStorage.setItem(STORAGE_KEYS.capo, String(capoSemitones));
+    applied = true;
+  }
+  const pitch = params.get("pitch");
+  if (pitch != null && /^\d+(\.\d+)?$/.test(pitch)) {
+    applyReferencePitch(pitch);
+    localStorage.setItem(STORAGE_KEYS.referencePitch, String(referencePitch));
+    applied = true;
+  }
+  const m = params.get("mode");
+  if (m && (MODE_PRESETS[m] || m === "custom")) {
+    if (m === "custom") {
+      const r = params.get("react");
+      const ng = params.get("ng");
+      if (r != null && /^\d+$/.test(r)) applyReactivity(r);
+      if (ng != null && /^\d+$/.test(ng)) applyNoiseGate(ng);
+      applyMode("custom");
+      localStorage.setItem(STORAGE_KEYS.reactivity, String(reactivity));
+      localStorage.setItem(STORAGE_KEYS.noiseGate, String(noiseGate));
+    } else {
+      applyMode(m);
+    }
+    localStorage.setItem(STORAGE_KEYS.mode, mode);
+    applied = true;
+  }
+  return applied;
+}
+
+// --- Keyboard shortcuts ---
+// Space = start/stop, 1-9 = preview string, M = toggle haptic.
+document.addEventListener("keydown", (event) => {
+  if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+  const target = event.target;
+  // Don't hijack typing/selection in form controls (except the start button itself).
+  if (target && target !== startBtn && target !== document.body) {
+    const tag = target.tagName;
+    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || target.isContentEditable) {
+      return;
+    }
+  }
+
+  if (event.code === "Space") {
+    event.preventDefault();
+    startTuner();
+    return;
+  }
+  if (event.key === "m" || event.key === "M") {
+    if (hapticToggle) {
+      hapticToggle.checked = !hapticToggle.checked;
+      hapticToggle.dispatchEvent(new Event("change"));
+      event.preventDefault();
+    }
+    return;
+  }
+  if (/^[1-9]$/.test(event.key)) {
+    const idx = Number(event.key) - 1;
+    const buttons = stringsList.querySelectorAll(".note-button");
+    if (idx < buttons.length) {
+      buttons[idx].click();
+      event.preventDefault();
+    }
+  }
+});
+
+window.addEventListener("resize", () => {
+  drawHistory();
+});
+
 // --- Initialize from localStorage ---
 (function init() {
+  loadCustomTunings();
+  renderInstrumentSelect();
+  // Ensure the dropdown reflects the (possibly fallback-corrected) currentInstrument.
+  if (instrumentSelect && getInstrumentDef(currentInstrument)) {
+    instrumentSelect.value = currentInstrument;
+  }
+
   const savedMode = localStorage.getItem(STORAGE_KEYS.mode) || DEFAULT_MODE;
   const savedReactivity = localStorage.getItem(STORAGE_KEYS.reactivity);
   const savedNoiseGate = localStorage.getItem(STORAGE_KEYS.noiseGate);
@@ -431,5 +1071,23 @@ refPitchSelect.addEventListener("change", (event) => {
   }
 
   applyReferencePitch(savedReferencePitch ?? DEFAULT_REFERENCE_PITCH);
+
+  const savedCapo = localStorage.getItem(STORAGE_KEYS.capo);
+  applyCapo(savedCapo ?? 0);
+
+  const savedHaptic = localStorage.getItem(STORAGE_KEYS.haptic);
+  if (savedHaptic != null) hapticEnabled = savedHaptic === "1";
+  if (hapticToggle) hapticToggle.checked = hapticEnabled;
+
+  // Theme: respect saved preference, else prefers-color-scheme, else dark.
+  let savedTheme = localStorage.getItem(STORAGE_KEYS.theme);
+  if (!savedTheme) {
+    savedTheme = window.matchMedia?.("(prefers-color-scheme: light)")?.matches ? "light" : "dark";
+  }
+  applyTheme(savedTheme);
+
+  // URL params override stored prefs, and persist themselves.
+  applySettingsFromUrl();
+
   updateStringsList();
 })();

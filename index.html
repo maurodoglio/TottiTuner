@@ -11,6 +11,8 @@
   <header>
     <h1>🎸 TottiTuner</h1>
     <p>Tune your string instrument with ease</p>
+    <button id="theme-toggle" class="theme-toggle" type="button"
+            aria-label="Switch theme" title="Switch theme">🌙</button>
   </header>
 
   <main>
@@ -20,17 +22,55 @@
       <h2>Choose Instrument</h2>
       <select id="instrument-select" aria-label="Select instrument"></select>
       <ul id="strings-list" class="strings-grid" aria-label="String notes"></ul>
+      <div class="custom-tunings-bar">
+        <button id="manage-tunings-btn" type="button" class="link-btn">
+          ⚙ Manage custom tunings
+        </button>
+      </div>
     </section>
+
+    <!-- Custom-tunings dialog -->
+    <dialog id="tunings-dialog" class="tunings-dialog" aria-labelledby="tunings-dialog-title">
+      <form method="dialog" id="tunings-dialog-form">
+        <h2 id="tunings-dialog-title">Custom tunings</h2>
+
+        <div id="tunings-list" class="tunings-list"></div>
+
+        <h3>Add new tuning</h3>
+        <label class="dlg-field">
+          <span>Name</span>
+          <input id="new-tuning-name" type="text" maxlength="40" placeholder="e.g. Drop D" required />
+        </label>
+        <label class="dlg-field">
+          <span>Based on (for tone)</span>
+          <select id="new-tuning-base"></select>
+        </label>
+        <label class="dlg-field">
+          <span>Strings (comma-separated <code>NOTE:HZ</code>, e.g. <code>D2:73.42, A2:110</code>)</span>
+          <input id="new-tuning-strings" type="text"
+                 placeholder="E2:82.41, A2:110, D3:146.83, G3:196, B3:246.94, E4:329.63" required />
+        </label>
+
+        <p id="new-tuning-error" class="dlg-error" hidden></p>
+
+        <div class="dlg-actions">
+          <button type="button" id="add-tuning-btn">Add tuning</button>
+          <button type="submit" value="close">Done</button>
+        </div>
+      </form>
+    </dialog>
 
     <!-- Tuner Meter -->
     <section class="tuner-meter" id="tuner-meter" aria-label="Tuner display">
       <div class="readout">
-        <div id="note-display" aria-live="polite" aria-label="Detected note">--</div>
+        <div id="note-display" aria-hidden="true">--</div>
         <div class="readout-right">
-          <div id="freq-display" aria-live="polite">-- Hz</div>
-          <div id="cents-display" aria-live="polite">0¢</div>
+          <div id="freq-display" aria-hidden="true">-- Hz</div>
+          <div id="cents-display" aria-hidden="true">0¢</div>
         </div>
       </div>
+      <!-- Throttled live region for screen readers -->
+      <div id="tuner-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
       <!-- SVG Arc Gauge -->
       <div class="gauge-wrap">
@@ -78,7 +118,12 @@
         </svg>
       </div>
 
-      <div class="tuner-controls">
+      <!-- Tuning history strip chart -->
+      <canvas id="history-canvas" class="history-canvas" width="560" height="60"
+              aria-label="Recent tuning history" role="img"></canvas>
+
+      <details class="tuner-controls" id="tuner-controls">
+        <summary>⚙ Advanced settings</summary>
         <div class="mode-control">
           <label for="mode-select">Response Mode</label>
           <select id="mode-select" aria-label="Tuner response mode">
@@ -135,18 +180,60 @@
             <option value="444">444 Hz</option>
           </select>
         </div>
-      </div>
+
+        <div class="haptic-control">
+          <label for="haptic-toggle" class="checkbox-label">
+            <input id="haptic-toggle" type="checkbox" checked />
+            <span>Vibrate when in tune (mobile)</span>
+          </label>
+        </div>
+
+        <div class="capo-control">
+          <label for="capo-select">Capo</label>
+          <select id="capo-select" aria-label="Capo position in frets (semitones)">
+            <option value="0" selected>None</option>
+            <option value="1">1st fret (+1)</option>
+            <option value="2">2nd fret (+2)</option>
+            <option value="3">3rd fret (+3)</option>
+            <option value="4">4th fret (+4)</option>
+            <option value="5">5th fret (+5)</option>
+            <option value="6">6th fret (+6)</option>
+            <option value="7">7th fret (+7)</option>
+            <option value="8">8th fret (+8)</option>
+            <option value="9">9th fret (+9)</option>
+            <option value="10">10th fret (+10)</option>
+            <option value="11">11th fret (+11)</option>
+            <option value="12">12th fret (+12)</option>
+          </select>
+        </div>
+      </details>
 
       <div id="tuner-status" class="tuner-status" aria-live="polite">Press Start to begin</div>
+      <p id="tuner-hint" class="tuner-hint">
+        🎤 We'll ask for microphone access when you press Start. Audio is processed
+        entirely in your browser and never leaves your device.
+      </p>
+      <p id="tuner-error-help" class="tuner-error-help" hidden></p>
     </section>
 
     <!-- Start / Stop button -->
     <button id="start-btn" class="btn-start" aria-pressed="false">Start Tuner</button>
 
+    <div class="setup-actions">
+      <button id="share-btn" type="button" class="link-btn">🔗 Share my setup</button>
+      <button id="reset-btn" type="button" class="link-btn">↺ Reset to defaults</button>
+      <span id="setup-actions-status" class="setup-actions-status" role="status" aria-live="polite"></span>
+    </div>
+
   </main>
 
   <footer>
     <p>Uses your microphone to detect pitch in real time</p>
+    <p class="kbd-hint">
+      Shortcuts: <kbd>Space</kbd> start/stop ·
+      <kbd>1</kbd>–<kbd>9</kbd> toggle reference tone ·
+      <kbd>M</kbd> toggle vibration
+    </p>
   </footer>
 
   <script type="module" src="tuner.js"></script>
