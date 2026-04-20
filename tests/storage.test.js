@@ -22,6 +22,9 @@ describe("storage helpers", () => {
       referencePitch: 440,
       targetMode: "auto",
       targetString: null,
+      hapticEnabled: true,
+      capoSemitones: 0,
+      theme: null,
     });
   });
 
@@ -33,6 +36,9 @@ describe("storage helpers", () => {
     window.localStorage.setItem(STORAGE_KEYS.referencePitch, "442");
     window.localStorage.setItem(STORAGE_KEYS.targetMode, "target");
     window.localStorage.setItem(STORAGE_KEYS.targetString, "A4");
+    window.localStorage.setItem(STORAGE_KEYS.haptic, "0");
+    window.localStorage.setItem(STORAGE_KEYS.capo, "2");
+    window.localStorage.setItem(STORAGE_KEYS.theme, "light");
 
     expect(loadSettings()).toMatchObject({
       instrument: "violin",
@@ -42,6 +48,9 @@ describe("storage helpers", () => {
       referencePitch: 442,
       targetMode: "target",
       targetString: "A4",
+      hapticEnabled: false,
+      capoSemitones: 2,
+      theme: "light",
     });
   });
 

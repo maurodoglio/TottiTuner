@@ -21,9 +21,27 @@ describe("pitch engine utilities", () => {
   it("scales instrument strings with midi metadata", () => {
     expect(instrumentStrings[0]).toMatchObject({
       note: "E2",
+      sourceNote: "E2",
       adjustedFreq: 82.41,
     });
     expect(instrumentStrings[0].midi).toBeTypeOf("number");
+  });
+
+  it("applies capo transposition while preserving the original source note", () => {
+    const capoStrings = buildInstrumentStrings(
+      [
+        { note: "E2", freq: 82.41 },
+        { note: "A2", freq: 110.0 },
+      ],
+      440,
+      2
+    );
+
+    expect(capoStrings[0]).toMatchObject({
+      note: "F#2",
+      sourceNote: "E2",
+    });
+    expect(capoStrings[0].adjustedFreq).toBeGreaterThan(92);
   });
 
   it("finds the nearest string for a detected pitch", () => {

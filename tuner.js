@@ -52,6 +52,11 @@ const dom = {
   refPitchSelect: document.getElementById("ref-pitch-select"),
   targetModeSelect: document.getElementById("target-mode-select"),
   targetNoteDisplay: document.getElementById("target-note-display"),
+  tunerHint: document.getElementById("tuner-hint"),
+  tunerErrorHelp: document.getElementById("tuner-error-help"),
+  hapticToggle: document.getElementById("haptic-toggle"),
+  capoSelect: document.getElementById("capo-select"),
+  themeToggle: document.getElementById("theme-toggle"),
 };
 
 const state = {
@@ -64,6 +69,7 @@ const state = {
   frameId: null,
   isRunning: false,
   lastAnalysisTime: 0,
+  wasInTune: false,
   engineState: {
     smoothedFrequency: null,
     lastStableTime: 0,
@@ -76,14 +82,49 @@ function getModePreset(value) {
   return MODE_PRESETS[value] || MODE_PRESETS[DEFAULT_MODE];
 }
 
+function getPreferredTheme() {
+  if (state.theme) return state.theme;
+  return window.matchMedia?.("(prefers-color-scheme: light)")?.matches ? "light" : "dark";
+}
+
+function applyTheme(theme) {
+  const next = theme === "light" ? "light" : "dark";
+  state.theme = next;
+
+  if (next === "light") {
+    document.documentElement.setAttribute("data-theme", "light");
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+  }
+
+  if (dom.themeToggle) {
+    dom.themeToggle.textContent = next === "light" ? "☀️" : "🌙";
+    dom.themeToggle.setAttribute(
+      "aria-label",
+      next === "light" ? "Switch to dark theme" : "Switch to light theme"
+    );
+    dom.themeToggle.title = dom.themeToggle.getAttribute("aria-label");
+  }
+}
+
+function setErrorHelp(message = "") {
+  if (!dom.tunerErrorHelp) return;
+  dom.tunerErrorHelp.textContent = message;
+  dom.tunerErrorHelp.hidden = !message;
+}
+
+function setHintVisible(visible) {
+  if (!dom.tunerHint) return;
+  dom.tunerHint.hidden = !visible;
+}
+
 function populateInstrumentOptions() {
+  dom.instrumentSelect.innerHTML = "";
   Object.entries(INSTRUMENTS).forEach(([key, instrument]) => {
     const option = document.createElement("option");
     option.value = key;
     option.textContent = instrument.label;
-    if (key === state.instrument) {
-      option.selected = true;
-    }
+    option.selected = key === state.instrument;
     dom.instrumentSelect.appendChild(option);
   });
 }
@@ -96,6 +137,15 @@ function updateDerivedControls() {
   dom.modeSelect.value = state.mode;
   dom.refPitchSelect.value = String(state.referencePitch || DEFAULT_REFERENCE_PITCH);
   dom.targetModeSelect.value = state.targetMode || DEFAULT_TARGET_MODE;
+
+  if (dom.hapticToggle) {
+    dom.hapticToggle.checked = state.hapticEnabled;
+  }
+
+  if (dom.capoSelect) {
+    dom.capoSelect.value = String(state.capoSemitones ?? 0);
+  }
+
   applyNeedleTransition(document.documentElement, getNeedleTransitionMs(state.reactivity));
 }
 
@@ -115,14 +165,17 @@ function updateTargetNoteSummary() {
 function rebuildInstrumentStrings() {
   state.instrumentStrings = buildInstrumentStrings(
     INSTRUMENTS[state.instrument].strings,
-    state.referencePitch
+    state.referencePitch,
+    state.capoSemitones
   );
 
   if (
     state.targetString &&
-    !state.instrumentStrings.some((string) => string.note === state.targetString)
+    !state.instrumentStrings.some(
+      (string) => string.note === state.targetString || string.sourceNote === state.targetString
+    )
   ) {
-    state.targetString = state.instrumentStrings[0]?.note ?? null;
+    state.targetString = state.instrumentStrings[0]?.sourceNote ?? state.instrumentStrings[0]?.note ?? null;
     saveSetting(STORAGE_KEYS.targetString, state.targetString ?? "");
   }
 
@@ -139,6 +192,7 @@ function rebuildInstrumentStrings() {
       saveSetting(STORAGE_KEYS.targetString, note);
       rebuildInstrumentStrings();
       updateTargetNoteSummary();
+      if (state.isRunning) resetDisplay("Listening... Play the selected target string clearly.");
     },
   });
 
@@ -152,9 +206,11 @@ function resetDisplay(message = "Waiting for sound...") {
     display: null,
     lockedTargetNote: null,
   };
+  state.wasInTune = false;
   resetVisualState({ ...dom });
   renderStatusMessage(dom, message, state.isRunning ? "listening" : "idle");
   highlightActiveString(dom.stringsList, null, state.targetMode === "target" ? state.targetString : null);
+  updateTargetNoteSummary();
 }
 
 function applyMode(mode) {
@@ -198,6 +254,7 @@ function handlePitchResult(result, timestamp) {
   state.engineState = nextState;
 
   if (!nextState.display) {
+    state.wasInTune = false;
     if (hadStableDisplay && timestamp - nextState.lastStableTime <= PITCH_HOLD_MS) {
       renderStatusMessage(dom, "Holding last stable pitch...", "listening");
       return;
@@ -214,6 +271,16 @@ function handlePitchResult(result, timestamp) {
     state.targetMode === "target" ? nextState.display.targetNote : null
   );
   updateTargetNoteSummary();
+
+  const inTune = nextState.display.status === "in-tune";
+  if (inTune && !state.wasInTune && state.hapticEnabled && typeof navigator.vibrate === "function") {
+    try {
+      navigator.vibrate(30);
+    } catch {
+      // ignore unsupported vibration failures
+    }
+  }
+  state.wasInTune = inTune;
 }
 
 function processAudio(timestamp = performance.now()) {
@@ -243,7 +310,10 @@ async function startTuner() {
   }
 
   try {
+    setErrorHelp("");
+    setHintVisible(false);
     renderStatusMessage(dom, "Requesting microphone access...", "listening");
+
     state.mediaStream = await getAudioMediaStream();
     state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
     const source = state.audioContext.createMediaStreamSource(state.mediaStream);
@@ -253,12 +323,13 @@ async function startTuner() {
 
     state.engineState = {
       smoothedFrequency: null,
-      lastStableTime: performance.now(),
+      lastStableTime: 0,
       display: null,
       lockedTargetNote: state.targetMode === "target" ? state.targetString : null,
     };
     state.lastAnalysisTime = performance.now() - getSampleIntervalMs(state.reactivity);
     state.isRunning = true;
+    state.wasInTune = false;
     dom.startBtn.textContent = "Stop Tuner";
     dom.startBtn.classList.add("active");
     dom.startBtn.setAttribute("aria-pressed", "true");
@@ -267,15 +338,21 @@ async function startTuner() {
   } catch (error) {
     if (error.name === "InsecureContextError") {
       renderStatusMessage(dom, "Use HTTPS or localhost to enable the microphone.", "error");
+      setErrorHelp("Browsers only allow microphone access on secure origins. Try localhost or an HTTPS URL.");
     } else if (error.name === "NotSupportedError") {
       renderStatusMessage(dom, "This browser does not support microphone tuning.", "error");
+      setErrorHelp("Try a recent version of Chrome, Edge, Firefox, or Safari.");
     } else if (error.name === "NotFoundError") {
       renderStatusMessage(dom, "No microphone device was found.", "error");
-    } else if (error.name === "NotAllowedError") {
+      setErrorHelp("Connect or enable a microphone, then press Start again.");
+    } else if (error.name === "NotAllowedError" || error.name === "SecurityError") {
       renderStatusMessage(dom, "Microphone access was denied. Allow permission and try again.", "error");
+      setErrorHelp("Use the permissions control near your browser address bar to allow microphone access for this site.");
     } else {
       renderStatusMessage(dom, "Unable to start the tuner. Check your microphone and try again.", "error");
+      setErrorHelp("If the problem continues, reload the page and verify that your microphone is available.");
     }
+    setHintVisible(false);
     console.error(error);
   }
 }
@@ -290,10 +367,14 @@ function stopTuner() {
   state.analyser = null;
   state.mediaStream = null;
   state.audioContext = null;
+  state.lastAnalysisTime = 0;
   state.isRunning = false;
+  state.wasInTune = false;
   dom.startBtn.textContent = "Start Tuner";
   dom.startBtn.classList.remove("active");
   dom.startBtn.setAttribute("aria-pressed", "false");
+  setErrorHelp("");
+  setHintVisible(true);
   resetDisplay("Press Start to begin");
 }
 
@@ -340,7 +421,7 @@ function bindEvents() {
   dom.targetModeSelect.addEventListener("change", (event) => {
     state.targetMode = event.target.value;
     if (state.targetMode === "target" && !state.targetString) {
-      state.targetString = state.instrumentStrings[0]?.note ?? null;
+      state.targetString = state.instrumentStrings[0]?.sourceNote ?? state.instrumentStrings[0]?.note ?? null;
     }
     saveSetting(STORAGE_KEYS.targetMode, state.targetMode);
     if (state.targetString) {
@@ -348,6 +429,65 @@ function bindEvents() {
     }
     rebuildInstrumentStrings();
     resetDisplay();
+  });
+
+  if (dom.hapticToggle) {
+    dom.hapticToggle.addEventListener("change", (event) => {
+      state.hapticEnabled = Boolean(event.target.checked);
+      saveSetting(STORAGE_KEYS.haptic, state.hapticEnabled ? "1" : "0");
+    });
+  }
+
+  if (dom.capoSelect) {
+    dom.capoSelect.addEventListener("change", (event) => {
+      state.capoSemitones = Math.max(0, Math.min(12, Math.round(Number(event.target.value) || 0)));
+      saveSetting(STORAGE_KEYS.capo, state.capoSemitones);
+      rebuildInstrumentStrings();
+      resetDisplay();
+    });
+  }
+
+  if (dom.themeToggle) {
+    dom.themeToggle.addEventListener("click", () => {
+      const next = state.theme === "light" ? "dark" : "light";
+      applyTheme(next);
+      saveSetting(STORAGE_KEYS.theme, next);
+    });
+  }
+
+  document.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+    const target = event.target;
+    if (target && target !== dom.startBtn && target !== document.body) {
+      const tag = target.tagName;
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || target.isContentEditable) {
+        return;
+      }
+    }
+
+    if (event.code === "Space") {
+      event.preventDefault();
+      startTuner();
+      return;
+    }
+
+    if (event.key === "m" || event.key === "M") {
+      if (dom.hapticToggle) {
+        dom.hapticToggle.checked = !dom.hapticToggle.checked;
+        dom.hapticToggle.dispatchEvent(new Event("change"));
+        event.preventDefault();
+      }
+      return;
+    }
+
+    if (/^[1-9]$/.test(event.key)) {
+      const idx = Number(event.key) - 1;
+      const buttons = dom.stringsList.querySelectorAll(".note-button");
+      if (idx < buttons.length) {
+        buttons[idx].click();
+        event.preventDefault();
+      }
+    }
   });
 }
 
@@ -360,7 +500,10 @@ function bindEvents() {
     state.minClarity = DEFAULT_MIN_CLARITY;
   }
   updateDerivedControls();
+  applyTheme(getPreferredTheme());
   rebuildInstrumentStrings();
   bindEvents();
+  setHintVisible(true);
+  setErrorHelp("");
   resetDisplay("Press Start to begin");
 })();

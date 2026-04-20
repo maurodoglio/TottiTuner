@@ -30,6 +30,7 @@ function writeValue(key, value) {
 
 export function loadSettings() {
   const savedReferencePitch = Number(readValue(STORAGE_KEYS.referencePitch));
+  const savedCapo = Number(readValue(STORAGE_KEYS.capo));
 
   return {
     instrument: readValue(STORAGE_KEYS.instrument) || "guitar",
@@ -42,6 +43,10 @@ export function loadSettings() {
         : DEFAULT_REFERENCE_PITCH,
     targetMode: readValue(STORAGE_KEYS.targetMode) || DEFAULT_TARGET_MODE,
     targetString: readValue(STORAGE_KEYS.targetString) || null,
+    hapticEnabled: readValue(STORAGE_KEYS.haptic) !== "0",
+    capoSemitones:
+      Number.isFinite(savedCapo) && savedCapo >= 0 ? Math.max(0, Math.min(12, Math.round(savedCapo))) : 0,
+    theme: readValue(STORAGE_KEYS.theme) || null,
   };
 }
 

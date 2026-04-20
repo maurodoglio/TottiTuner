@@ -45,6 +45,10 @@ export const STORAGE_KEYS = {
   referencePitch: "tottiTuner_referencePitch",
   targetMode: "tottiTuner_targetMode",
   targetString: "tottiTuner_targetString",
+  haptic: "tottiTuner_haptic",
+  capo: "tottiTuner_capo",
+  theme: "tottiTuner_theme",
+  customTunings: "tottiTuner_customTunings",
 };
 
 export function mapRange(value, inMin, inMax, outMin, outMax) {

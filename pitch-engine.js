@@ -1,13 +1,21 @@
 import { IN_TUNE_CENTS, SLIGHTLY_OFF_CENTS } from "./config.js";
 import { noteFromFrequency, noteName } from "./instruments.js";
 
-export function buildInstrumentStrings(strings, referencePitch) {
-  return strings.map(({ note, freq }) => ({
-    note,
-    baseFreq: freq,
-    adjustedFreq: freq * (referencePitch / 440),
-    midi: noteFromFrequency(freq * (referencePitch / 440), referencePitch),
-  }));
+export function buildInstrumentStrings(strings, referencePitch, capoSemitones = 0) {
+  const capoFactor = Math.pow(2, capoSemitones / 12);
+
+  return strings.map(({ note, freq }) => {
+    const adjustedFreq = freq * (referencePitch / 440) * capoFactor;
+    const midi = noteFromFrequency(adjustedFreq, referencePitch);
+
+    return {
+      note: capoSemitones > 0 ? noteName(midi) : note,
+      sourceNote: note,
+      baseFreq: freq,
+      adjustedFreq,
+      midi,
+    };
+  });
 }
 
 export function smoothFrequency(previousFrequency, frequency, alpha) {
@@ -30,7 +38,11 @@ export function findNearestString(frequency, instrumentStrings) {
 
 export function resolveTargetString({ targetMode, targetString, instrumentStrings, frequency }) {
   if (targetMode === "target" && targetString) {
-    return instrumentStrings.find((string) => string.note === targetString) ?? null;
+    return (
+      instrumentStrings.find(
+        (string) => string.note === targetString || string.sourceNote === targetString
+      ) ?? null
+    );
   }
 
   return findNearestString(frequency, instrumentStrings);

@@ -76,9 +76,10 @@ export function renderStringsList({
     item.tabIndex = 0;
     item.setAttribute("role", "button");
     item.classList.add("note-button");
-    item.dataset.note = string.note;
+    item.dataset.note = string.sourceNote ?? string.note;
+    item.dataset.displayNote = string.note;
     item.dataset.midi = String(string.midi);
-    if (currentTargetString === string.note) {
+    if (currentTargetString === (string.sourceNote ?? string.note)) {
       item.classList.add("target-selected");
     }
     item.setAttribute(
@@ -94,7 +95,7 @@ export function renderStringsList({
     item.addEventListener("click", (event) => {
       if (event.target instanceof HTMLElement && event.target.classList.contains("string-target-btn")) {
         event.stopPropagation();
-        onSelectTarget(string.note);
+        onSelectTarget(string.sourceNote ?? string.note);
         return;
       }
       onPlay(string);
@@ -107,7 +108,7 @@ export function renderStringsList({
       ) {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          onSelectTarget(string.note);
+          onSelectTarget(string.sourceNote ?? string.note);
         }
         return;
       }
@@ -118,7 +119,7 @@ export function renderStringsList({
       }
       if (event.key.toLowerCase() === "t") {
         event.preventDefault();
-        onSelectTarget(string.note);
+        onSelectTarget(string.sourceNote ?? string.note);
       }
     });
 
