@@ -1,52 +1,159 @@
-// Amplitude threshold used to trim silent edges before autocorrelation
+// Amplitude threshold used to trim silent edges before autocorrelation.
 export const AUTOCORRELATE_EDGE_THRESHOLD = 0.2;
 
-// Autocorrelation-based pitch detection
-export function autoCorrelate(buf, sampleRate, rmsThreshold) {
-  const SIZE = buf.length;
-  const rms = Math.sqrt(buf.reduce((sum, v) => sum + v * v, 0) / SIZE);
+const DEFAULT_MIN_FREQUENCY = 20;
+const DEFAULT_MAX_FREQUENCY = 5000;
+const DEFAULT_MIN_CLARITY = 0;
 
-  if (rms < rmsThreshold) return -1; // Signal too quiet
+function trimSignal(buffer) {
+  let start = 0;
+  let end = buffer.length - 1;
 
-  // Trim silent edges
-  let r1 = 0, r2 = SIZE - 1;
-  for (let i = 0; i < SIZE / 2; i++) {
-    if (Math.abs(buf[i]) < AUTOCORRELATE_EDGE_THRESHOLD) { r1 = i; break; }
-  }
-  for (let i = 1; i < SIZE / 2; i++) {
-    if (Math.abs(buf[SIZE - i]) < AUTOCORRELATE_EDGE_THRESHOLD) { r2 = SIZE - i; break; }
-  }
-
-  const trimmed = buf.slice(r1, r2);
-  const c = new Float32Array(trimmed.length);
-
-  for (let i = 0; i < trimmed.length; i++) {
-    for (let j = 0; j < trimmed.length - i; j++) {
-      c[i] += trimmed[j] * trimmed[j + i];
+  for (let index = 0; index < buffer.length / 2; index += 1) {
+    if (Math.abs(buffer[index]) < AUTOCORRELATE_EDGE_THRESHOLD) {
+      start = index;
+      break;
     }
   }
 
-  // Find first valley, then the highest peak after it
-  let d = 0;
-  while (c[d] > c[d + 1]) d++;
-
-  let maxVal = -1, maxPos = -1;
-  for (let i = d; i < trimmed.length; i++) {
-    if (c[i] > maxVal) { maxVal = c[i]; maxPos = i; }
+  for (let index = 1; index < buffer.length / 2; index += 1) {
+    const reverseIndex = buffer.length - index;
+    if (Math.abs(buffer[reverseIndex]) < AUTOCORRELATE_EDGE_THRESHOLD) {
+      end = reverseIndex;
+      break;
+    }
   }
 
-  if (maxPos === -1) return -1;
+  return buffer.slice(start, end);
+}
 
-  // Interpolate around the peak for sub-sample accuracy
-  let T0 = maxPos;
-  const x1 = c[T0 - 1];
-  const x2 = c[T0];
-  const x3 = c[T0 + 1];
+function computeRms(buffer) {
+  if (!buffer.length) return 0;
+  const total = buffer.reduce((sum, value) => sum + value * value, 0);
+  return Math.sqrt(total / buffer.length);
+}
+
+function buildCorrelation(buffer) {
+  const correlation = new Float32Array(buffer.length);
+
+  for (let offset = 0; offset < buffer.length; offset += 1) {
+    for (let index = 0; index < buffer.length - offset; index += 1) {
+      correlation[offset] += buffer[index] * buffer[index + offset];
+    }
+  }
+
+  return correlation;
+}
+
+function findFirstValley(correlation) {
+  let index = 0;
+  while (index + 1 < correlation.length && correlation[index] > correlation[index + 1]) {
+    index += 1;
+  }
+  return index;
+}
+
+function findPeak(correlation, startIndex) {
+  let peakValue = -1;
+  let peakIndex = -1;
+
+  for (let index = startIndex; index < correlation.length; index += 1) {
+    if (correlation[index] > peakValue) {
+      peakValue = correlation[index];
+      peakIndex = index;
+    }
+  }
+
+  return { peakIndex, peakValue };
+}
+
+function interpolatePeak(correlation, peakIndex) {
+  if (peakIndex <= 0 || peakIndex >= correlation.length - 1) {
+    return peakIndex;
+  }
+
+  const x1 = correlation[peakIndex - 1];
+  const x2 = correlation[peakIndex];
+  const x3 = correlation[peakIndex + 1];
   const a = (x1 + x3 - 2 * x2) / 2;
   const b = (x3 - x1) / 2;
-  if (a) T0 = T0 - b / (2 * a);
 
-  return sampleRate / T0;
+  if (!Number.isFinite(a) || a === 0) {
+    return peakIndex;
+  }
+
+  return peakIndex - b / (2 * a);
+}
+
+export function analyzePitch(
+  buffer,
+  sampleRate,
+  {
+    rmsThreshold,
+    minClarity = DEFAULT_MIN_CLARITY,
+    minFrequency = DEFAULT_MIN_FREQUENCY,
+    maxFrequency = DEFAULT_MAX_FREQUENCY,
+  } = {}
+) {
+  const rms = computeRms(buffer);
+
+  if (rms < rmsThreshold) {
+    return {
+      frequency: null,
+      clarity: 0,
+      rms,
+    };
+  }
+
+  const trimmed = trimSignal(buffer);
+  if (trimmed.length < 3) {
+    return {
+      frequency: null,
+      clarity: 0,
+      rms,
+    };
+  }
+
+  const correlation = buildCorrelation(trimmed);
+  const valleyIndex = findFirstValley(correlation);
+  const { peakIndex, peakValue } = findPeak(correlation, valleyIndex);
+
+  if (peakIndex === -1 || !Number.isFinite(peakValue) || peakValue <= 0) {
+    return {
+      frequency: null,
+      clarity: 0,
+      rms,
+    };
+  }
+
+  const interpolatedPeak = interpolatePeak(correlation, peakIndex);
+  const frequency = interpolatedPeak > 0 ? sampleRate / interpolatedPeak : null;
+  const clarity = correlation[0] > 0 ? Math.max(0, Math.min(1, peakValue / correlation[0])) : 0;
+  const isInRange = frequency && frequency >= minFrequency && frequency <= maxFrequency;
+
+  if (!isInRange || clarity < minClarity) {
+    return {
+      frequency: null,
+      clarity,
+      rms,
+    };
+  }
+
+  return {
+    frequency,
+    clarity,
+    rms,
+  };
+}
+
+// Backward-compatible API used by the UI loop.
+export function autoCorrelate(buffer, sampleRate, rmsThreshold) {
+  const result = analyzePitch(buffer, sampleRate, {
+    rmsThreshold,
+    minClarity: DEFAULT_MIN_CLARITY,
+  });
+
+  return result.frequency ?? -1;
 }
 
 function isLocalhost(hostname) {
@@ -61,7 +168,14 @@ export function getAudioMediaStream() {
   }
 
   if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-    return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    return navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+      video: false,
+    });
   }
 
   const legacyGetUserMedia =
