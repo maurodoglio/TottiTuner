@@ -29,6 +29,7 @@
         <div class="readout-right">
           <div id="freq-display" aria-live="polite">-- Hz</div>
           <div id="cents-display" aria-live="polite">0¢</div>
+          <div id="clarity-display" aria-live="polite">Signal clarity: --</div>
         </div>
       </div>
 
@@ -134,6 +135,15 @@
             <option value="443">443 Hz</option>
             <option value="444">444 Hz</option>
           </select>
+        </div>
+
+        <div class="target-mode-control">
+          <label for="target-mode-select">Tuning Mode</label>
+          <select id="target-mode-select" aria-label="Tuning target mode">
+            <option value="auto" selected>Auto detect nearest string</option>
+            <option value="target">Tune selected target string</option>
+          </select>
+          <p id="target-note-display" class="reactivity-hint">Target: Auto</p>
         </div>
       </div>
 

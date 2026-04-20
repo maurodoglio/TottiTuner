@@ -1,435 +1,366 @@
+import { analyzePitch, getAudioMediaStream } from "./audio.js";
 import {
-  INSTRUMENTS,
-  noteFromFrequency,
-  centsOffFromPitch,
-  noteName,
-} from "./instruments.js";
-import { autoCorrelate, getAudioMediaStream } from "./audio.js";
+  BUFFER_SIZE,
+  DEFAULT_MIN_CLARITY,
+  DEFAULT_MODE,
+  DEFAULT_TARGET_MODE,
+  DEFAULT_REFERENCE_PITCH,
+  MODE_PRESETS,
+  NOTE_LOCK_CENTS,
+  NOTE_RELEASE_CENTS,
+  PITCH_HOLD_MS,
+  STORAGE_KEYS,
+  clampPercentage,
+  getNeedleTransitionMs,
+  getRmsThreshold,
+  getSampleIntervalMs,
+  getSmoothingAlpha,
+} from "./config.js";
+import { INSTRUMENTS } from "./instruments.js";
+import {
+  advancePitchState,
+  buildInstrumentStrings,
+  resolveTargetString,
+} from "./pitch-engine.js";
+import { closePreview, playPreview } from "./preview.js";
+import { loadSettings, saveSetting } from "./storage.js";
+import {
+  applyNeedleTransition,
+  highlightActiveString,
+  renderPitchDisplay,
+  renderStatusMessage,
+  renderStringsList,
+  resetVisualState,
+} from "./ui.js";
 
-// --- Constants ---
-const BUFFER_SIZE = 2048;
-const PREVIEW_PEAK_GAIN = 0.14;
-// Must be greater than 0 for exponential ramps.
-const PREVIEW_MIN_GAIN = 0.0001;
-const PREVIEW_ATTACK_TIME = 0.02;
-const PREVIEW_SUSTAIN_TIME = 1.0;
-const PREVIEW_RELEASE_TIME = 0.4;
-// Short fade when interrupting a preview mid-playback, to avoid clicks.
-const PREVIEW_STOP_FADE_TIME = 0.02;
-const DEFAULT_NOISE_GATE = 50;
-const DEFAULT_REACTIVITY = 60;
-const DEFAULT_MODE = "balanced";
-const DEFAULT_REFERENCE_PITCH = 440;
-const PITCH_HOLD_MS = 280;
-const MAX_SAMPLE_INTERVAL_MS = 130;
-const MIN_SAMPLE_INTERVAL_MS = 25;
-const MIN_RMS_THRESHOLD = 0.004;
-const MAX_RMS_THRESHOLD = 0.03;
-const MIN_SMOOTHING_ALPHA = 0.14;
-const MAX_SMOOTHING_ALPHA = 0.72;
-const MAX_NEEDLE_TRANSITION_MS = 300;
-const MIN_NEEDLE_TRANSITION_MS = 70;
-const MODE_PRESETS = {
-  performance: { reactivity: 85, noiseGate: 35 },
-  balanced: { reactivity: DEFAULT_REACTIVITY, noiseGate: DEFAULT_NOISE_GATE },
-  precision: { reactivity: 35, noiseGate: 70 },
+const dom = {
+  startBtn: document.getElementById("start-btn"),
+  instrumentSelect: document.getElementById("instrument-select"),
+  noteDisplay: document.getElementById("note-display"),
+  freqDisplay: document.getElementById("freq-display"),
+  centsDisplay: document.getElementById("cents-display"),
+  clarityDisplay: document.getElementById("clarity-display"),
+  needle: document.getElementById("needle"),
+  tunerStatus: document.getElementById("tuner-status"),
+  stringsList: document.getElementById("strings-list"),
+  tunerMeter: document.getElementById("tuner-meter"),
+  modeSelect: document.getElementById("mode-select"),
+  noiseGateSlider: document.getElementById("noise-gate-slider"),
+  noiseGateValue: document.getElementById("noise-gate-value"),
+  reactivitySlider: document.getElementById("reactivity-slider"),
+  reactivityValue: document.getElementById("reactivity-value"),
+  refPitchSelect: document.getElementById("ref-pitch-select"),
+  targetModeSelect: document.getElementById("target-mode-select"),
+  targetNoteDisplay: document.getElementById("target-note-display"),
 };
-const STORAGE_KEYS = {
-  instrument: "tottiTuner_instrument",
-  mode: "tottiTuner_mode",
-  reactivity: "tottiTuner_reactivity",
-  noiseGate: "tottiTuner_noiseGate",
-  referencePitch: "tottiTuner_referencePitch",
+
+const state = {
+  ...loadSettings(),
+  minClarity: DEFAULT_MIN_CLARITY,
+  instrumentStrings: [],
+  audioContext: null,
+  analyser: null,
+  mediaStream: null,
+  frameId: null,
+  isRunning: false,
+  lastAnalysisTime: 0,
+  engineState: {
+    smoothedFrequency: null,
+    lastStableTime: 0,
+    display: null,
+    lockedTargetNote: null,
+  },
 };
 
-// --- Audio state ---
-let audioContext = null;
-let analyser = null;
-let mediaStream = null;
-let animFrame = null;
-let isRunning = false;
-let previewAudioContext = null;
-let activePreview = null; // { oscillator, gainNode }
-let smoothedFrequency = null;
-let lastAnalysisTime = 0;
-let lastStablePitchTime = 0;
-
-// --- UI state ---
-let currentInstrument = localStorage.getItem(STORAGE_KEYS.instrument) || "guitar";
-let mode = DEFAULT_MODE;
-let noiseGate = DEFAULT_NOISE_GATE;
-let reactivity = DEFAULT_REACTIVITY;
-let referencePitch = DEFAULT_REFERENCE_PITCH;
-
-// --- DOM refs ---
-const startBtn = document.getElementById("start-btn");
-const instrumentSelect = document.getElementById("instrument-select");
-const noteDisplay = document.getElementById("note-display");
-const freqDisplay = document.getElementById("freq-display");
-const centsDisplay = document.getElementById("cents-display");
-const needle = document.getElementById("needle");
-const tunerStatus = document.getElementById("tuner-status");
-const stringsList = document.getElementById("strings-list");
-const tunerMeter = document.getElementById("tuner-meter");
-const modeSelect = document.getElementById("mode-select");
-const noiseGateSlider = document.getElementById("noise-gate-slider");
-const noiseGateValue = document.getElementById("noise-gate-value");
-const reactivitySlider = document.getElementById("reactivity-slider");
-const reactivityValue = document.getElementById("reactivity-value");
-const refPitchSelect = document.getElementById("ref-pitch-select");
-
-// Populate instrument selector, restoring saved selection
-Object.entries(INSTRUMENTS).forEach(([key, inst]) => {
-  const opt = document.createElement("option");
-  opt.value = key;
-  opt.textContent = inst.label;
-  if (key === currentInstrument) opt.selected = true;
-  instrumentSelect.appendChild(opt);
-});
-
-// INSTRUMENTS frequencies are defined at A4=440. Scale proportionally for other reference pitches.
-function scaledFreq(baseFreq) {
-  return baseFreq * (referencePitch / 440);
+function getModePreset(value) {
+  return MODE_PRESETS[value] || MODE_PRESETS[DEFAULT_MODE];
 }
 
-function updateStringsList() {
-  stringsList.innerHTML = "";
-  INSTRUMENTS[currentInstrument].strings.forEach(({ note, freq }) => {
-    const adjustedFreq = scaledFreq(freq);
-    const li = document.createElement("li");
-    li.tabIndex = 0;
-    li.setAttribute("role", "button");
-    li.setAttribute("aria-label", `Play ${note} at ${adjustedFreq.toFixed(2)} Hz`);
-    li.classList.add("note-button");
-    // Store MIDI note number for active-string highlighting comparison
-    li.dataset.midi = String(noteFromFrequency(adjustedFreq, referencePitch));
-    li.innerHTML = `<span class="string-note">${note}</span><span class="string-freq">${adjustedFreq.toFixed(2)} Hz</span>`;
-    li.addEventListener("click", () => playNotePreview(adjustedFreq));
-    li.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      playNotePreview(adjustedFreq);
-    });
-    stringsList.appendChild(li);
-  });
-}
-
-instrumentSelect.addEventListener("change", () => {
-  currentInstrument = instrumentSelect.value;
-  localStorage.setItem(STORAGE_KEYS.instrument, currentInstrument);
-  updateStringsList();
-  resetDisplay();
-});
-
-function mapRange(value, inMin, inMax, outMin, outMax) {
-  return outMin + ((value - inMin) / (inMax - inMin)) * (outMax - outMin);
-}
-
-function getSampleIntervalMs() {
-  return Math.round(mapRange(reactivity, 1, 100, MAX_SAMPLE_INTERVAL_MS, MIN_SAMPLE_INTERVAL_MS));
-}
-
-function getRmsThreshold() {
-  return mapRange(noiseGate, 1, 100, MIN_RMS_THRESHOLD, MAX_RMS_THRESHOLD);
-}
-
-function getSmoothingAlpha() {
-  return mapRange(reactivity, 1, 100, MIN_SMOOTHING_ALPHA, MAX_SMOOTHING_ALPHA);
-}
-
-function applyNeedleSpeed() {
-  const transitionMs = Math.round(
-    mapRange(reactivity, 1, 100, MAX_NEEDLE_TRANSITION_MS, MIN_NEEDLE_TRANSITION_MS)
-  );
-  document.documentElement.style.setProperty("--needle-transition-duration", `${transitionMs}ms`);
-}
-
-function applyReactivity(value) {
-  const parsed = Number(value);
-  reactivity = Number.isFinite(parsed) ? Math.max(1, Math.min(100, parsed)) : DEFAULT_REACTIVITY;
-  reactivitySlider.value = String(reactivity);
-  reactivityValue.textContent = `${reactivity}%`;
-  applyNeedleSpeed();
-}
-
-function applyNoiseGate(value) {
-  const parsed = Number(value);
-  noiseGate = Number.isFinite(parsed) ? Math.max(1, Math.min(100, parsed)) : DEFAULT_NOISE_GATE;
-  noiseGateSlider.value = String(noiseGate);
-  noiseGateValue.textContent = `${noiseGate}%`;
-}
-
-function applyMode(value) {
-  if (value === "custom") {
-    mode = "custom";
-    modeSelect.value = "custom";
-    return;
-  }
-  const preset = MODE_PRESETS[value] || MODE_PRESETS[DEFAULT_MODE];
-  mode = MODE_PRESETS[value] ? value : DEFAULT_MODE;
-  modeSelect.value = mode;
-  applyReactivity(preset.reactivity);
-  applyNoiseGate(preset.noiseGate);
-}
-
-function applyReferencePitch(value) {
-  const parsed = Number(value);
-  referencePitch = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REFERENCE_PITCH;
-  const available = Array.from(refPitchSelect.options).map(o => Number(o.value));
-  refPitchSelect.value = available.includes(referencePitch)
-    ? String(referencePitch)
-    : String(DEFAULT_REFERENCE_PITCH);
-}
-
-function clearActiveStrings() {
-  stringsList.querySelectorAll(".note-button.active").forEach(el => el.classList.remove("active"));
-}
-
-function resetDisplay() {
-  noteDisplay.textContent = "--";
-  freqDisplay.textContent = "-- Hz";
-  centsDisplay.textContent = "0¢";
-  setNeedle(0);
-  clearActiveStrings();
-  tunerStatus.textContent = "Waiting for sound...";
-  tunerStatus.className = "tuner-status";
-  tunerMeter.className = "tuner-meter";
-}
-
-function setNeedle(cents) {
-  // cents: -50 to +50; map to -85deg to +85deg rotation
-  const clamped = Math.max(-50, Math.min(50, cents));
-  const deg = (clamped / 50) * 85;
-  needle.style.transform = `rotate(${deg}deg)`;
-}
-
-function highlightActiveString(noteNum, cents) {
-  const midiStr = String(noteNum);
-  stringsList.querySelectorAll(".note-button").forEach(li => {
-    li.classList.toggle("active", li.dataset.midi === midiStr && Math.abs(cents) <= 15);
-  });
-}
-
-function updateTunerUI(frequency) {
-  const noteNum = noteFromFrequency(frequency, referencePitch);
-  const cents = centsOffFromPitch(frequency, noteNum, referencePitch);
-  const name = noteName(noteNum);
-
-  noteDisplay.textContent = name;
-  freqDisplay.textContent = `${frequency.toFixed(1)} Hz`;
-  centsDisplay.textContent = `${cents >= 0 ? "+" : ""}${cents}¢`;
-
-  setNeedle(cents);
-  highlightActiveString(noteNum, cents);
-
-  const absCents = Math.abs(cents);
-  if (absCents <= 5) {
-    tunerStatus.textContent = "In Tune ✓";
-    tunerStatus.className = "tuner-status in-tune";
-    tunerMeter.className = "tuner-meter in-tune";
-  } else if (absCents <= 15) {
-    tunerStatus.textContent = cents < 0 ? "Slightly Flat ↓" : "Slightly Sharp ↑";
-    tunerStatus.className = "tuner-status slightly-off";
-    tunerMeter.className = "tuner-meter slightly-off";
-  } else {
-    tunerStatus.textContent = cents < 0 ? "Flat ↓" : "Sharp ↑";
-    tunerStatus.className = "tuner-status out-of-tune";
-    tunerMeter.className = "tuner-meter out-of-tune";
-  }
-}
-
-function processAudio(timestamp) {
-  if (timestamp - lastAnalysisTime < getSampleIntervalMs()) {
-    animFrame = requestAnimationFrame(processAudio);
-    return;
-  }
-  lastAnalysisTime = timestamp;
-
-  const buf = new Float32Array(BUFFER_SIZE);
-  analyser.getFloatTimeDomainData(buf);
-  const frequency = autoCorrelate(buf, audioContext.sampleRate, getRmsThreshold());
-
-  if (frequency !== -1 && frequency > 20 && frequency < 5000) {
-    if (smoothedFrequency === null) {
-      smoothedFrequency = frequency;
-    } else {
-      smoothedFrequency += (frequency - smoothedFrequency) * getSmoothingAlpha();
+function populateInstrumentOptions() {
+  Object.entries(INSTRUMENTS).forEach(([key, instrument]) => {
+    const option = document.createElement("option");
+    option.value = key;
+    option.textContent = instrument.label;
+    if (key === state.instrument) {
+      option.selected = true;
     }
-    lastStablePitchTime = timestamp;
-    updateTunerUI(smoothedFrequency);
-  } else if (timestamp - lastStablePitchTime > PITCH_HOLD_MS) {
-    smoothedFrequency = null;
-    resetDisplay();
+    dom.instrumentSelect.appendChild(option);
+  });
+}
+
+function updateDerivedControls() {
+  dom.reactivitySlider.value = String(state.reactivity);
+  dom.reactivityValue.textContent = `${state.reactivity}%`;
+  dom.noiseGateSlider.value = String(state.noiseGate);
+  dom.noiseGateValue.textContent = `${state.noiseGate}%`;
+  dom.modeSelect.value = state.mode;
+  dom.refPitchSelect.value = String(state.referencePitch || DEFAULT_REFERENCE_PITCH);
+  dom.targetModeSelect.value = state.targetMode || DEFAULT_TARGET_MODE;
+  applyNeedleTransition(document.documentElement, getNeedleTransitionMs(state.reactivity));
+}
+
+function updateTargetNoteSummary() {
+  const resolvedTarget = resolveTargetString({
+    targetMode: state.targetMode,
+    targetString: state.targetString,
+    instrumentStrings: state.instrumentStrings,
+    frequency: state.engineState.smoothedFrequency,
+  });
+
+  dom.targetNoteDisplay.textContent = resolvedTarget
+    ? `Target: ${resolvedTarget.note}`
+    : "Target: Auto";
+}
+
+function rebuildInstrumentStrings() {
+  state.instrumentStrings = buildInstrumentStrings(
+    INSTRUMENTS[state.instrument].strings,
+    state.referencePitch
+  );
+
+  if (
+    state.targetString &&
+    !state.instrumentStrings.some((string) => string.note === state.targetString)
+  ) {
+    state.targetString = state.instrumentStrings[0]?.note ?? null;
+    saveSetting(STORAGE_KEYS.targetString, state.targetString ?? "");
   }
 
-  animFrame = requestAnimationFrame(processAudio);
+  renderStringsList({
+    stringsList: dom.stringsList,
+    instrumentStrings: state.instrumentStrings,
+    currentTargetString: state.targetMode === "target" ? state.targetString : null,
+    onPlay: (string) => playPreview(string.adjustedFreq, INSTRUMENTS[state.instrument].harmonics),
+    onSelectTarget: (note) => {
+      state.targetMode = "target";
+      state.targetString = note;
+      dom.targetModeSelect.value = "target";
+      saveSetting(STORAGE_KEYS.targetMode, state.targetMode);
+      saveSetting(STORAGE_KEYS.targetString, note);
+      rebuildInstrumentStrings();
+      updateTargetNoteSummary();
+    },
+  });
+
+  updateTargetNoteSummary();
 }
 
-function getPreviewAudioContext() {
-  if (!previewAudioContext || previewAudioContext.state === "closed") {
-    previewAudioContext = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  return previewAudioContext;
-}
-
-function stopActivePreview() {
-  if (!activePreview) return;
-  const { oscillator, gainNode } = activePreview;
-  const now = previewAudioContext.currentTime;
-  gainNode.gain.cancelScheduledValues(now);
-  gainNode.gain.setValueAtTime(gainNode.gain.value, now);
-  gainNode.gain.linearRampToValueAtTime(0, now + PREVIEW_STOP_FADE_TIME);
-  try { oscillator.stop(now + PREVIEW_STOP_FADE_TIME); } catch (_) {}
-  activePreview = null;
-}
-
-function playNotePreview(freq) {
-  const context = getPreviewAudioContext();
-  if (context.state === "suspended") context.resume();
-
-  stopActivePreview();
-
-  const { harmonics } = INSTRUMENTS[currentInstrument];
-  const real = new Float32Array(harmonics);
-  const imag = new Float32Array(harmonics.length);
-  const wave = context.createPeriodicWave(real, imag);
-
-  const oscillator = context.createOscillator();
-  const gainNode = context.createGain();
-  const now = context.currentTime;
-  const releaseStart = now + PREVIEW_ATTACK_TIME + PREVIEW_SUSTAIN_TIME;
-  const endTime = releaseStart + PREVIEW_RELEASE_TIME;
-
-  oscillator.setPeriodicWave(wave);
-  oscillator.frequency.setValueAtTime(freq, now);
-
-  gainNode.gain.setValueAtTime(PREVIEW_MIN_GAIN, now);
-  gainNode.gain.exponentialRampToValueAtTime(PREVIEW_PEAK_GAIN, now + PREVIEW_ATTACK_TIME);
-  gainNode.gain.setValueAtTime(PREVIEW_PEAK_GAIN, releaseStart);
-  gainNode.gain.exponentialRampToValueAtTime(PREVIEW_MIN_GAIN, endTime);
-
-  oscillator.connect(gainNode);
-  gainNode.connect(context.destination);
-
-  oscillator.start(now);
-  oscillator.stop(endTime);
-
-  activePreview = { oscillator, gainNode };
-  oscillator.onended = () => {
-    if (activePreview && activePreview.oscillator === oscillator) activePreview = null;
+function resetDisplay(message = "Waiting for sound...") {
+  state.engineState = {
+    smoothedFrequency: null,
+    lastStableTime: 0,
+    display: null,
+    lockedTargetNote: null,
   };
+  resetVisualState({ ...dom });
+  renderStatusMessage(dom, message, state.isRunning ? "listening" : "idle");
+  highlightActiveString(dom.stringsList, null, state.targetMode === "target" ? state.targetString : null);
+}
+
+function applyMode(mode) {
+  if (mode === "custom") {
+    state.mode = "custom";
+    state.minClarity = DEFAULT_MIN_CLARITY;
+    updateDerivedControls();
+    return;
+  }
+
+  const preset = getModePreset(mode);
+  state.mode = MODE_PRESETS[mode] ? mode : DEFAULT_MODE;
+  state.reactivity = preset.reactivity;
+  state.noiseGate = preset.noiseGate;
+  state.minClarity = preset.minClarity ?? DEFAULT_MIN_CLARITY;
+  updateDerivedControls();
+}
+
+function syncCustomSettings() {
+  state.mode = "custom";
+  state.minClarity = DEFAULT_MIN_CLARITY;
+  dom.modeSelect.value = "custom";
+  saveSetting(STORAGE_KEYS.mode, state.mode);
+}
+
+function handlePitchResult(result, timestamp) {
+  const hadStableDisplay = Boolean(state.engineState.display);
+  const nextState = advancePitchState(state.engineState, result, {
+    timestamp,
+    referencePitch: state.referencePitch,
+    holdMs: PITCH_HOLD_MS,
+    smoothingAlpha: getSmoothingAlpha(state.reactivity),
+    targetMode: state.targetMode,
+    targetString: state.targetString,
+    instrumentStrings: state.instrumentStrings,
+    minClarity: state.minClarity,
+    noteLockCents: NOTE_LOCK_CENTS,
+    noteReleaseCents: NOTE_RELEASE_CENTS,
+  });
+
+  state.engineState = nextState;
+
+  if (!nextState.display) {
+    if (hadStableDisplay && timestamp - nextState.lastStableTime <= PITCH_HOLD_MS) {
+      renderStatusMessage(dom, "Holding last stable pitch...", "listening");
+      return;
+    }
+    renderStatusMessage(dom, "Signal too weak or unclear — play a single string louder.", "warning");
+    highlightActiveString(dom.stringsList, null, state.targetMode === "target" ? state.targetString : null);
+    return;
+  }
+
+  renderPitchDisplay(dom, nextState.display, { targetMode: state.targetMode });
+  highlightActiveString(
+    dom.stringsList,
+    nextState.display.activeMidi,
+    state.targetMode === "target" ? nextState.display.targetNote : null
+  );
+  updateTargetNoteSummary();
+}
+
+function processAudio(timestamp = performance.now()) {
+  if (!state.analyser || !state.audioContext) return;
+
+  if (timestamp - state.lastAnalysisTime < getSampleIntervalMs(state.reactivity)) {
+    state.frameId = requestAnimationFrame(processAudio);
+    return;
+  }
+
+  state.lastAnalysisTime = timestamp;
+  const buffer = new Float32Array(BUFFER_SIZE);
+  state.analyser.getFloatTimeDomainData(buffer);
+  const pitchResult = analyzePitch(buffer, state.audioContext.sampleRate, {
+    rmsThreshold: getRmsThreshold(state.noiseGate),
+    minClarity: state.minClarity,
+  });
+
+  handlePitchResult(pitchResult, timestamp);
+  state.frameId = requestAnimationFrame(processAudio);
 }
 
 async function startTuner() {
-  if (isRunning) {
+  if (state.isRunning) {
     stopTuner();
     return;
   }
 
   try {
-    mediaStream = await getAudioMediaStream();
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    const source = audioContext.createMediaStreamSource(mediaStream);
+    renderStatusMessage(dom, "Requesting microphone access...", "listening");
+    state.mediaStream = await getAudioMediaStream();
+    state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const source = state.audioContext.createMediaStreamSource(state.mediaStream);
+    state.analyser = state.audioContext.createAnalyser();
+    state.analyser.fftSize = BUFFER_SIZE;
+    source.connect(state.analyser);
 
-    analyser = audioContext.createAnalyser();
-    analyser.fftSize = BUFFER_SIZE;
-    source.connect(analyser);
-
-    smoothedFrequency = null;
-    lastAnalysisTime = performance.now() - getSampleIntervalMs();
-    lastStablePitchTime = performance.now();
-    isRunning = true;
-    startBtn.textContent = "Stop Tuner";
-    startBtn.classList.add("active");
-    startBtn.setAttribute("aria-pressed", "true");
-    tunerStatus.textContent = "Listening...";
+    state.engineState = {
+      smoothedFrequency: null,
+      lastStableTime: performance.now(),
+      display: null,
+      lockedTargetNote: state.targetMode === "target" ? state.targetString : null,
+    };
+    state.lastAnalysisTime = performance.now() - getSampleIntervalMs(state.reactivity);
+    state.isRunning = true;
+    dom.startBtn.textContent = "Stop Tuner";
+    dom.startBtn.classList.add("active");
+    dom.startBtn.setAttribute("aria-pressed", "true");
+    renderStatusMessage(dom, "Listening... Play a single string clearly.", "listening");
     processAudio();
-  } catch (err) {
-    if (err.name === "InsecureContextError") {
-      tunerStatus.textContent = "Use HTTPS (or localhost) to enable microphone";
-    } else if (err.name === "NotSupportedError") {
-      tunerStatus.textContent = "Microphone is not supported in this browser";
-    } else if (err.name === "NotFoundError") {
-      tunerStatus.textContent = "No microphone device found";
+  } catch (error) {
+    if (error.name === "InsecureContextError") {
+      renderStatusMessage(dom, "Use HTTPS or localhost to enable the microphone.", "error");
+    } else if (error.name === "NotSupportedError") {
+      renderStatusMessage(dom, "This browser does not support microphone tuning.", "error");
+    } else if (error.name === "NotFoundError") {
+      renderStatusMessage(dom, "No microphone device was found.", "error");
+    } else if (error.name === "NotAllowedError") {
+      renderStatusMessage(dom, "Microphone access was denied. Allow permission and try again.", "error");
     } else {
-      tunerStatus.textContent = "Microphone access denied";
+      renderStatusMessage(dom, "Unable to start the tuner. Check your microphone and try again.", "error");
     }
-    tunerStatus.className = "tuner-status out-of-tune";
-    console.error(err);
+    console.error(error);
   }
 }
 
 function stopTuner() {
-  if (animFrame) cancelAnimationFrame(animFrame);
-  if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
-  if (audioContext) audioContext.close().catch(() => {});
-  stopActivePreview();
-  if (previewAudioContext && previewAudioContext.state !== "closed") {
-    previewAudioContext.close().catch(() => {});
-  }
-  animFrame = null;
-  analyser = null;
-  mediaStream = null;
-  audioContext = null;
-  smoothedFrequency = null;
-  lastAnalysisTime = 0;
-  lastStablePitchTime = 0;
-  previewAudioContext = null;
-  isRunning = false;
-  startBtn.textContent = "Start Tuner";
-  startBtn.classList.remove("active");
-  startBtn.setAttribute("aria-pressed", "false");
-  resetDisplay();
+  if (state.frameId) cancelAnimationFrame(state.frameId);
+  if (state.mediaStream) state.mediaStream.getTracks().forEach((track) => track.stop());
+  if (state.audioContext) state.audioContext.close().catch(() => {});
+  closePreview();
+
+  state.frameId = null;
+  state.analyser = null;
+  state.mediaStream = null;
+  state.audioContext = null;
+  state.isRunning = false;
+  dom.startBtn.textContent = "Start Tuner";
+  dom.startBtn.classList.remove("active");
+  dom.startBtn.setAttribute("aria-pressed", "false");
+  resetDisplay("Press Start to begin");
 }
 
-// --- Event listeners ---
-startBtn.addEventListener("click", startTuner);
+function bindEvents() {
+  dom.startBtn.addEventListener("click", startTuner);
 
-modeSelect.addEventListener("change", (event) => {
-  applyMode(event.target.value);
-  localStorage.setItem(STORAGE_KEYS.mode, mode);
-  if (mode !== "custom") {
-    localStorage.setItem(STORAGE_KEYS.reactivity, String(reactivity));
-    localStorage.setItem(STORAGE_KEYS.noiseGate, String(noiseGate));
-  }
-});
+  dom.instrumentSelect.addEventListener("change", () => {
+    state.instrument = dom.instrumentSelect.value;
+    saveSetting(STORAGE_KEYS.instrument, state.instrument);
+    rebuildInstrumentStrings();
+    resetDisplay();
+  });
 
-noiseGateSlider.addEventListener("input", (event) => {
-  applyNoiseGate(event.target.value);
-  applyMode("custom");
-  localStorage.setItem(STORAGE_KEYS.noiseGate, String(noiseGate));
-  localStorage.setItem(STORAGE_KEYS.mode, "custom");
-});
+  dom.modeSelect.addEventListener("change", (event) => {
+    applyMode(event.target.value);
+    saveSetting(STORAGE_KEYS.mode, state.mode);
+    saveSetting(STORAGE_KEYS.reactivity, state.reactivity);
+    saveSetting(STORAGE_KEYS.noiseGate, state.noiseGate);
+    resetDisplay();
+  });
 
-reactivitySlider.addEventListener("input", (event) => {
-  applyReactivity(event.target.value);
-  applyMode("custom");
-  localStorage.setItem(STORAGE_KEYS.reactivity, String(reactivity));
-  localStorage.setItem(STORAGE_KEYS.mode, "custom");
-});
+  dom.noiseGateSlider.addEventListener("input", (event) => {
+    state.noiseGate = clampPercentage(event.target.value, state.noiseGate);
+    dom.noiseGateValue.textContent = `${state.noiseGate}%`;
+    syncCustomSettings();
+    saveSetting(STORAGE_KEYS.noiseGate, state.noiseGate);
+  });
 
-refPitchSelect.addEventListener("change", (event) => {
-  referencePitch = Number(event.target.value);
-  localStorage.setItem(STORAGE_KEYS.referencePitch, String(referencePitch));
-  updateStringsList();
-  if (isRunning) resetDisplay();
-});
+  dom.reactivitySlider.addEventListener("input", (event) => {
+    state.reactivity = clampPercentage(event.target.value, state.reactivity);
+    dom.reactivityValue.textContent = `${state.reactivity}%`;
+    applyNeedleTransition(document.documentElement, getNeedleTransitionMs(state.reactivity));
+    syncCustomSettings();
+    saveSetting(STORAGE_KEYS.reactivity, state.reactivity);
+  });
 
-// --- Initialize from localStorage ---
+  dom.refPitchSelect.addEventListener("change", (event) => {
+    state.referencePitch = Number(event.target.value) || DEFAULT_REFERENCE_PITCH;
+    saveSetting(STORAGE_KEYS.referencePitch, state.referencePitch);
+    rebuildInstrumentStrings();
+    resetDisplay();
+  });
+
+  dom.targetModeSelect.addEventListener("change", (event) => {
+    state.targetMode = event.target.value;
+    if (state.targetMode === "target" && !state.targetString) {
+      state.targetString = state.instrumentStrings[0]?.note ?? null;
+    }
+    saveSetting(STORAGE_KEYS.targetMode, state.targetMode);
+    if (state.targetString) {
+      saveSetting(STORAGE_KEYS.targetString, state.targetString);
+    }
+    rebuildInstrumentStrings();
+    resetDisplay();
+  });
+}
+
 (function init() {
-  const savedMode = localStorage.getItem(STORAGE_KEYS.mode) || DEFAULT_MODE;
-  const savedReactivity = localStorage.getItem(STORAGE_KEYS.reactivity);
-  const savedNoiseGate = localStorage.getItem(STORAGE_KEYS.noiseGate);
-  const savedReferencePitch = localStorage.getItem(STORAGE_KEYS.referencePitch);
-
-  if (savedMode === "custom" && savedReactivity != null && savedNoiseGate != null) {
-    applyReactivity(savedReactivity);
-    applyNoiseGate(savedNoiseGate);
-    applyMode("custom");
-  } else {
-    applyMode(savedMode);
+  populateInstrumentOptions();
+  applyMode(state.mode);
+  if (state.mode === "custom") {
+    state.reactivity = clampPercentage(state.reactivity, getModePreset(DEFAULT_MODE).reactivity);
+    state.noiseGate = clampPercentage(state.noiseGate, getModePreset(DEFAULT_MODE).noiseGate);
+    state.minClarity = DEFAULT_MIN_CLARITY;
   }
-
-  applyReferencePitch(savedReferencePitch ?? DEFAULT_REFERENCE_PITCH);
-  updateStringsList();
+  updateDerivedControls();
+  rebuildInstrumentStrings();
+  bindEvents();
+  resetDisplay("Press Start to begin");
 })();

@@ -135,6 +135,26 @@ select:focus { outline: 2px solid var(--accent); }
   box-shadow: 0 4px 14px rgba(0, 212, 160, 0.3);
 }
 
+.note-button.target-selected {
+  border-color: rgba(168, 85, 247, 0.9);
+  box-shadow: 0 4px 14px rgba(168, 85, 247, 0.28);
+}
+
+.string-target-btn {
+  margin-top: 0.4rem;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+
+.string-target-btn:hover {
+  border-color: rgba(168, 85, 247, 0.7);
+}
+
 .strings-grid li:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -167,6 +187,10 @@ select:focus { outline: 2px solid var(--accent); }
 .tuner-meter.in-tune    { border-color: var(--green); }
 .tuner-meter.slightly-off { border-color: var(--yellow); }
 .tuner-meter.out-of-tune  { border-color: var(--accent); }
+.tuner-meter.listening { border-color: rgba(0, 212, 160, 0.25); }
+.tuner-meter.warning { border-color: var(--yellow); }
+.tuner-meter.error { border-color: var(--accent); }
+.tuner-meter.idle { border-color: rgba(255,255,255,0.06); }
 
 /* Note + freq + cents readout */
 .readout {
@@ -194,6 +218,11 @@ select:focus { outline: 2px solid var(--accent); }
 
 #cents-display {
   font-size: 1rem;
+  color: var(--muted);
+}
+
+#clarity-display {
+  font-size: 0.8rem;
   color: var(--muted);
 }
 
@@ -229,14 +258,16 @@ select:focus { outline: 2px solid var(--accent); }
 }
 
 .mode-control label,
-.ref-pitch-control label {
+.ref-pitch-control label,
+.target-mode-control label {
   display: block;
   font-size: 0.85rem;
   color: var(--muted);
   margin-bottom: 0.35rem;
 }
 
-.mode-control select {
+.mode-control select,
+.target-mode-control select {
   width: 100%;
 }
 
@@ -289,6 +320,10 @@ select:focus { outline: 2px solid var(--accent); }
 .tuner-status.in-tune     { color: var(--green); }
 .tuner-status.slightly-off { color: var(--yellow); }
 .tuner-status.out-of-tune  { color: var(--accent); }
+.tuner-status.listening { color: var(--text); }
+.tuner-status.warning { color: var(--yellow); }
+.tuner-status.error { color: var(--accent); }
+.tuner-status.idle { color: var(--muted); }
 
 /* Start button */
 .btn-start {
