@@ -52,6 +52,27 @@ describe("audio pitch analysis", () => {
     expect(result.clarity).toBeLessThan(0.95);
   });
 
+  it("prefers the low fundamental for harmonic-rich bass notes", () => {
+    const harmonicRichBass = Float32Array.from({ length: size }, (_, index) => {
+      const time = index / sampleRate;
+      return (
+        Math.sin(2 * Math.PI * 41.2 * time) * 0.45 +
+        Math.sin(2 * Math.PI * 82.4 * time) * 0.8 +
+        Math.sin(2 * Math.PI * 123.6 * time) * 0.25
+      );
+    });
+
+    const result = analyzePitch(harmonicRichBass, sampleRate, {
+      rmsThreshold: 0.01,
+      minClarity: 0.5,
+      minFrequency: 30,
+      maxFrequency: 200,
+    });
+
+    expect(result.frequency).toBeCloseTo(41.2, 0);
+    expect(result.clarity).toBeGreaterThan(0.5);
+  });
+
   it("keeps the legacy autoCorrelate API", () => {
     const buffer = createSineBuffer(220, sampleRate, size);
 
