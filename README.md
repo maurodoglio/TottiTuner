@@ -10,8 +10,14 @@ A lightweight browser-based tuner for string instruments, built with vanilla Jav
   - Bass guitar
   - Ukulele
   - Violin
+  - Viola
   - Cello
+  - Double bass
   - Mandolin
+  - Banjo
+  - Tenor guitar
+  - Dobro / resonator guitar
+  - Charango
 - Adjustable response modes:
   - Performance
   - Balanced
@@ -23,6 +29,8 @@ A lightweight browser-based tuner for string instruments, built with vanilla Jav
 - Instrument-specific note preview playback
 - Signal clarity feedback and held-pitch stability behavior
 - localStorage persistence for user preferences
+- Built-in alternate tuning presets for guitar, violin, banjo, dobro, double bass, ukulele, and more
+- Custom tuning creation, selection, sharing, and reset-to-default flows
 
 ## Project structure
 
@@ -102,6 +110,9 @@ npm run format
 ### Auto detect nearest string
 The tuner matches the detected pitch to the closest string for the selected instrument.
 
+### Alternate and custom tunings
+Use the tuning preset selector to switch between built-in tunings for the active instrument. You can also create your own custom tunings from the **Manage custom tunings** dialog, then share the current setup or reset the app back to defaults.
+
 ### Tune selected target string
 Choose a string from the instrument list and switch to target mode. The tuner will keep feedback anchored to that specific string.
 
@@ -118,7 +129,6 @@ If the tuner cannot start, common reasons are:
 ## Roadmap ideas
 
 - Alternate tunings and custom tunings
-- Additional instruments
 - Better visual onboarding / first-run help
 - More advanced pitch confidence and note-lock strategies
 - Browser QA automation once Playwright browsers are installed

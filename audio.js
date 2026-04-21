@@ -1,4 +1,10 @@
 // Amplitude threshold used to trim silent edges before autocorrelation.
+import {
+  LOW_REGISTER_CLARITY_FLOOR,
+  LOW_REGISTER_HARMONIC_WEIGHT,
+  LOW_REGISTER_MAX_FREQUENCY,
+} from "./config.js";
+
 export const AUTOCORRELATE_EDGE_THRESHOLD = 0.2;
 
 const DEFAULT_MIN_FREQUENCY = 20;
@@ -85,6 +91,23 @@ function interpolatePeak(correlation, peakIndex) {
   return peakIndex - b / (2 * a);
 }
 
+function computeLowRegisterClarity(correlation, peakIndex) {
+  if (peakIndex <= 0 || peakIndex >= correlation.length) {
+    return 0;
+  }
+
+  const peakValue = correlation[peakIndex] ?? 0;
+  const firstHarmonicIndex = Math.max(1, Math.round(peakIndex / 2));
+  const harmonicValue = correlation[firstHarmonicIndex] ?? 0;
+  const normalizedPeak = correlation[0] > 0 ? peakValue / correlation[0] : 0;
+  const harmonicBlend = peakValue > 0 ? Math.min(1, harmonicValue / peakValue) : 0;
+
+  return Math.max(
+    normalizedPeak,
+    Math.min(1, normalizedPeak + harmonicBlend * LOW_REGISTER_HARMONIC_WEIGHT)
+  );
+}
+
 export function analyzePitch(
   buffer,
   sampleRate,
@@ -128,10 +151,18 @@ export function analyzePitch(
 
   const interpolatedPeak = interpolatePeak(correlation, peakIndex);
   const frequency = interpolatedPeak > 0 ? sampleRate / interpolatedPeak : null;
-  const clarity = correlation[0] > 0 ? Math.max(0, Math.min(1, peakValue / correlation[0])) : 0;
+  const normalizedClarity = correlation[0] > 0 ? Math.max(0, Math.min(1, peakValue / correlation[0])) : 0;
+  const clarity =
+    frequency && frequency <= LOW_REGISTER_MAX_FREQUENCY
+      ? Math.max(normalizedClarity, computeLowRegisterClarity(correlation, peakIndex))
+      : normalizedClarity;
+  const effectiveMinClarity =
+    frequency && frequency <= LOW_REGISTER_MAX_FREQUENCY
+      ? Math.min(minClarity, LOW_REGISTER_CLARITY_FLOOR)
+      : minClarity;
   const isInRange = frequency && frequency >= minFrequency && frequency <= maxFrequency;
 
-  if (!isInRange || clarity < minClarity) {
+  if (!isInRange || clarity < effectiveMinClarity) {
     return {
       frequency: null,
       clarity,

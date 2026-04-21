@@ -1,4 +1,8 @@
-import { IN_TUNE_CENTS, SLIGHTLY_OFF_CENTS } from "./config.js";
+import {
+  IN_TUNE_CENTS,
+  RETARGET_BIAS_CENTS,
+  SLIGHTLY_OFF_CENTS,
+} from "./config.js";
 import { noteFromFrequency, noteName } from "./instruments.js";
 
 export function buildInstrumentStrings(strings, referencePitch, capoSemitones = 0) {
@@ -67,10 +71,11 @@ export function classifyTuning(cents) {
 function chooseLockedTarget(
   previousLockedTarget,
   resolvedTarget,
-  cents,
+  frequency,
   targetMode,
   noteLockCents,
-  noteReleaseCents
+  _noteReleaseCents,
+  retargetBiasCents = RETARGET_BIAS_CENTS
 ) {
   if (targetMode === "target") {
     return resolvedTarget?.note ?? null;
@@ -81,18 +86,29 @@ function chooseLockedTarget(
   }
 
   if (!resolvedTarget) {
-    return previousLockedTarget;
+    return previousLockedTarget.note;
   }
 
-  if (previousLockedTarget === resolvedTarget.note || Math.abs(cents) <= noteLockCents) {
-    return previousLockedTarget;
+  if (previousLockedTarget.note === resolvedTarget.note) {
+    return previousLockedTarget.note;
   }
 
-  if (Math.abs(cents) >= noteReleaseCents) {
+  const previousCents = Math.abs(
+    Math.round(1200 * Math.log2(frequency / previousLockedTarget.adjustedFreq))
+  );
+  const resolvedCents = Math.abs(
+    Math.round(1200 * Math.log2(frequency / resolvedTarget.adjustedFreq))
+  );
+
+  if (previousCents <= noteLockCents) {
+    return previousLockedTarget.note;
+  }
+
+  if (resolvedCents + retargetBiasCents < previousCents) {
     return resolvedTarget.note;
   }
 
-  return previousLockedTarget;
+  return previousLockedTarget.note;
 }
 
 export function advancePitchState(previousState, detection, options) {
@@ -107,6 +123,7 @@ export function advancePitchState(previousState, detection, options) {
     minClarity,
     noteLockCents,
     noteReleaseCents,
+    retargetBiasCents = RETARGET_BIAS_CENTS,
   } = options;
 
   const hasConfidentFrequency =
@@ -147,17 +164,16 @@ export function advancePitchState(previousState, detection, options) {
     };
   }
 
-  const initialCents = Math.round(
-    1200 * Math.log2(smoothedFrequency / initialTarget.adjustedFreq)
-  );
-
   const lockedTargetNote = chooseLockedTarget(
-    previousState.lockedTargetNote,
+    previousState.lockedTargetNote
+      ? instrumentStrings.find((string) => string.note === previousState.lockedTargetNote) ?? null
+      : null,
     initialTarget,
-    initialCents,
+    smoothedFrequency,
     targetMode,
     noteLockCents,
-    noteReleaseCents
+    noteReleaseCents,
+    retargetBiasCents
   );
 
   const lockedTarget =

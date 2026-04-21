@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveActiveTuningContext } from "../tuning-state.js";
 import {
   advancePitchState,
   buildInstrumentStrings,
@@ -7,6 +8,18 @@ import {
   resolveTargetString,
   smoothFrequency,
 } from "../pitch-engine.js";
+
+const STABILITY_OPTIONS = {
+  referencePitch: 440,
+  holdMs: 280,
+  smoothingAlpha: 1,
+  targetMode: "auto",
+  targetString: null,
+  minClarity: 0.82,
+  noteLockCents: 18,
+  noteReleaseCents: 28,
+  retargetBiasCents: 10,
+};
 
 describe("pitch engine utilities", () => {
   const instrumentStrings = buildInstrumentStrings(
@@ -286,5 +299,81 @@ describe("advancePitchState", () => {
     );
 
     expect(held.display).toEqual(previous.display);
+  });
+
+  it("resolves active tuning context into pitch-engine compatible strings", () => {
+    const context = resolveActiveTuningContext({
+      instrumentId: "guitar",
+      tuningId: "dropD",
+      customTuningsByInstrument: {},
+      referencePitch: 440,
+      capoSemitones: 2,
+    });
+
+    const result = advancePitchState(
+      {
+        smoothedFrequency: null,
+        lastStableTime: 0,
+        display: null,
+        lockedTargetNote: null,
+      },
+      { frequency: context.instrumentStrings[0].adjustedFreq, clarity: 0.95 },
+      {
+        timestamp: 1000,
+        referencePitch: 440,
+        holdMs: 280,
+        smoothingAlpha: 1,
+        targetMode: "target",
+        targetString: context.instrumentStrings[0].sourceNote,
+        instrumentStrings: context.instrumentStrings,
+        minClarity: 0.82,
+        noteLockCents: 18,
+        noteReleaseCents: 28,
+        retargetBiasCents: 10,
+      }
+    );
+
+    expect(result.display).toMatchObject({
+      targetNote: context.instrumentStrings[0].note,
+      status: "in-tune",
+      note: context.instrumentStrings[0].note,
+    });
+  });
+
+  it("keeps the locked target when a neighboring note is only marginally closer", () => {
+    const closeStrings = buildInstrumentStrings(
+      [
+        { note: "C4", freq: 261.63 },
+        { note: "C#4", freq: 277.18 },
+      ],
+      440
+    );
+
+    const jittered = advancePitchState(
+      {
+        smoothedFrequency: 261.63,
+        lastStableTime: 1000,
+        display: {
+          note: "C4",
+          targetNote: "C4",
+          frequency: 261.63,
+          cents: 0,
+          status: "in-tune",
+          guidance: "In Tune ✓",
+          clarity: 0.95,
+          activeMidi: closeStrings[0].midi,
+        },
+        lockedTargetNote: "C4",
+      },
+      { frequency: 269.5, clarity: 0.95 },
+      {
+        ...STABILITY_OPTIONS,
+        timestamp: 1080,
+        instrumentStrings: closeStrings,
+      }
+    );
+
+    expect(jittered.lockedTargetNote).toBe("C4");
+    expect(jittered.display?.targetNote).toBe("C4");
   });
 });

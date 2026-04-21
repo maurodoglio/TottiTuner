@@ -17,6 +17,10 @@ export const MAX_NEEDLE_TRANSITION_MS = 300;
 export const MIN_NEEDLE_TRANSITION_MS = 70;
 export const NOTE_LOCK_CENTS = 18;
 export const NOTE_RELEASE_CENTS = 28;
+export const RETARGET_BIAS_CENTS = 10;
+export const LOW_REGISTER_MAX_FREQUENCY = 120;
+export const LOW_REGISTER_CLARITY_FLOOR = 0.32;
+export const LOW_REGISTER_HARMONIC_WEIGHT = 0.55;
 export const IN_TUNE_CENTS = 5;
 export const SLIGHTLY_OFF_CENTS = 15;
 
@@ -39,6 +43,7 @@ export const MODE_PRESETS = {
 
 export const STORAGE_KEYS = {
   instrument: "tottiTuner_instrument",
+  tuning: "tottiTuner_tuning",
   mode: "tottiTuner_mode",
   reactivity: "tottiTuner_reactivity",
   noiseGate: "tottiTuner_noiseGate",
@@ -48,6 +53,7 @@ export const STORAGE_KEYS = {
   haptic: "tottiTuner_haptic",
   capo: "tottiTuner_capo",
   theme: "tottiTuner_theme",
+  onboardingDismissed: "tottiTuner_onboardingDismissed",
   customTunings: "tottiTuner_customTunings",
 };
 

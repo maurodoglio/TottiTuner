@@ -62,6 +62,112 @@ export function renderStatusMessage({ tunerStatus, tunerMeter, clarityDisplay },
   }
 }
 
+export function renderTuningOptions({ tuningSelect, tunings, selectedTuningId }) {
+  tuningSelect.innerHTML = "";
+
+  const groups = [
+    { label: "Built-in tunings", items: tunings.filter((tuning) => tuning.kind !== "custom") },
+    { label: "Custom tunings", items: tunings.filter((tuning) => tuning.kind === "custom") },
+  ];
+
+  groups.forEach((group) => {
+    if (!group.items.length) return;
+    const optgroup = document.createElement("optgroup");
+    optgroup.label = group.label;
+
+    group.items.forEach((tuning) => {
+      const option = document.createElement("option");
+      option.value = tuning.id;
+      option.textContent = tuning.description ? `${tuning.label} — ${tuning.description}` : tuning.label;
+      option.selected = tuning.id === selectedTuningId;
+      optgroup.appendChild(option);
+    });
+
+    tuningSelect.appendChild(optgroup);
+  });
+
+  if (!tuningSelect.value && tuningSelect.options.length) {
+    tuningSelect.value = tuningSelect.options[0].value;
+  }
+}
+
+export function renderCustomTuningsList({
+  tuningsList,
+  customTunings,
+  selectedTuningId,
+  onSelect,
+  onDelete,
+}) {
+  tuningsList.innerHTML = "";
+
+  customTunings.forEach((tuning) => {
+    const row = document.createElement("div");
+    row.className = "tuning-row";
+
+    const info = document.createElement("div");
+    info.className = "tuning-info";
+
+    const name = document.createElement("div");
+    name.className = "tuning-name";
+    name.textContent = tuning.label;
+
+    const meta = document.createElement("div");
+    meta.className = "tuning-meta";
+    meta.textContent = tuning.description || tuning.strings.map((string) => string.note).join(" · ");
+
+    info.append(name, meta);
+
+    if (tuning.id === selectedTuningId) {
+      const selected = document.createElement("div");
+      selected.className = "tuning-meta";
+      selected.textContent = "Currently selected";
+      info.appendChild(selected);
+    }
+
+    const useButton = document.createElement("button");
+    useButton.type = "button";
+    useButton.textContent = tuning.id === selectedTuningId ? "Use again" : "Use";
+    useButton.addEventListener("click", () => onSelect(tuning.id));
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.textContent = "Delete";
+    deleteButton.addEventListener("click", () => onDelete(tuning.id));
+
+    row.append(info, useButton, deleteButton);
+    tuningsList.appendChild(row);
+  });
+}
+
+export function renderOnboardingChecklist({ root, items, dismissed = false }) {
+  if (!root) return;
+
+  root.innerHTML = "";
+  root.hidden = dismissed;
+
+  if (dismissed) {
+    return;
+  }
+
+  const list = document.createElement("ul");
+  list.className = "onboarding-checklist-list";
+
+  items.forEach((item) => {
+    const entry = document.createElement("li");
+    entry.dataset.completed = item.completed ? "true" : "false";
+    entry.className = item.completed ? "is-complete" : "is-pending";
+    entry.textContent = item.label;
+    list.appendChild(entry);
+  });
+
+  root.appendChild(list);
+}
+
+export function syncSelectValue(selectElement, value) {
+  if (!selectElement) return;
+  selectElement.value = value ?? "";
+}
+
 export function renderStringsList({
   stringsList,
   instrumentStrings,
@@ -86,11 +192,22 @@ export function renderStringsList({
       "aria-label",
       `Play ${string.note} at ${string.adjustedFreq.toFixed(2)} Hz or set it as target`
     );
-    item.innerHTML = `
-      <span class="string-note">${string.note}</span>
-      <span class="string-freq">${string.adjustedFreq.toFixed(2)} Hz</span>
-      <button class="string-target-btn" type="button" aria-label="Set ${string.note} as target">Target</button>
-    `;
+
+    const note = document.createElement("span");
+    note.className = "string-note";
+    note.textContent = string.note;
+
+    const frequency = document.createElement("span");
+    frequency.className = "string-freq";
+    frequency.textContent = `${string.adjustedFreq.toFixed(2)} Hz`;
+
+    const targetButton = document.createElement("button");
+    targetButton.className = "string-target-btn";
+    targetButton.type = "button";
+    targetButton.setAttribute("aria-label", `Set ${string.note} as target`);
+    targetButton.textContent = "Target";
+
+    item.append(note, frequency, targetButton);
 
     item.addEventListener("click", (event) => {
       if (event.target instanceof HTMLElement && event.target.classList.contains("string-target-btn")) {

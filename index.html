@@ -21,6 +21,13 @@
     <section class="card" aria-label="Instrument selection">
       <h2>Choose Instrument</h2>
       <select id="instrument-select" aria-label="Select instrument"></select>
+
+      <div class="tuning-picker">
+        <label for="tuning-select">Tuning preset</label>
+        <select id="tuning-select" aria-label="Select tuning preset"></select>
+        <p id="tuning-summary" class="tuning-summary">Choose a tuning preset or create your own.</p>
+      </div>
+
       <ul id="strings-list" class="strings-grid" aria-label="String notes"></ul>
       <div class="custom-tunings-bar">
         <button id="manage-tunings-btn" type="button" class="link-btn">
@@ -31,7 +38,7 @@
 
     <!-- Custom-tunings dialog -->
     <dialog id="tunings-dialog" class="tunings-dialog" aria-labelledby="tunings-dialog-title">
-      <form method="dialog" id="tunings-dialog-form">
+      <form method="dialog" id="tunings-dialog-form" novalidate>
         <h2 id="tunings-dialog-title">Custom tunings</h2>
 
         <div id="tunings-list" class="tunings-list"></div>
@@ -59,6 +66,31 @@
         </div>
       </form>
     </dialog>
+
+    <section id="onboarding-panel" class="card onboarding-panel" aria-labelledby="onboarding-title">
+      <div class="onboarding-header">
+        <div>
+          <h2 id="onboarding-title">Quick start</h2>
+          <p class="onboarding-intro">Start here if this is your first time: pick your setup, test a reference tone, and then allow microphone access.</p>
+        </div>
+        <button id="dismiss-onboarding-btn" type="button" class="link-btn">Hide tips</button>
+      </div>
+      <div id="onboarding-checklist" class="onboarding-checklist"></div>
+      <div class="onboarding-tips" aria-label="Quick help tips">
+        <article class="onboarding-tip">
+          <h3>1. Pick your setup</h3>
+          <p>Choose an instrument and tuning preset first. You can tap any string note to hear a reference tone before you start the mic.</p>
+        </article>
+        <article class="onboarding-tip">
+          <h3>2. Start and allow the mic</h3>
+          <p>Press <strong>Start Tuner</strong>, then allow microphone access when your browser asks. Audio stays in your browser.</p>
+        </article>
+        <article class="onboarding-tip">
+          <h3>3. Use target mode when needed</h3>
+          <p>Switch to <strong>Tune selected target string</strong> if nearby strings confuse auto-detect, especially on noisy or low-register instruments.</p>
+        </article>
+      </div>
+    </section>
 
     <!-- Tuner Meter -->
     <section class="tuner-meter" id="tuner-meter" aria-label="Tuner display">
