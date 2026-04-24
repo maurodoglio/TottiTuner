@@ -179,8 +179,6 @@ export function renderStringsList({
 
   instrumentStrings.forEach((string) => {
     const item = document.createElement("li");
-    item.tabIndex = 0;
-    item.setAttribute("role", "button");
     item.classList.add("note-button");
     item.dataset.note = string.sourceNote ?? string.note;
     item.dataset.displayNote = string.note;
@@ -188,10 +186,11 @@ export function renderStringsList({
     if (currentTargetString === (string.sourceNote ?? string.note)) {
       item.classList.add("target-selected");
     }
-    item.setAttribute(
-      "aria-label",
-      `Play ${string.note} at ${string.adjustedFreq.toFixed(2)} Hz or set it as target`
-    );
+
+    const playButton = document.createElement("button");
+    playButton.className = "string-play-btn";
+    playButton.type = "button";
+    playButton.setAttribute("aria-label", `Play ${string.note} at ${string.adjustedFreq.toFixed(2)} Hz`);
 
     const note = document.createElement("span");
     note.className = "string-note";
@@ -201,45 +200,28 @@ export function renderStringsList({
     frequency.className = "string-freq";
     frequency.textContent = `${string.adjustedFreq.toFixed(2)} Hz`;
 
+    playButton.append(note, frequency);
+
     const targetButton = document.createElement("button");
     targetButton.className = "string-target-btn";
     targetButton.type = "button";
     targetButton.setAttribute("aria-label", `Set ${string.note} as target`);
     targetButton.textContent = "Target";
 
-    item.append(note, frequency, targetButton);
+    const handlePlay = () => onPlay(string);
+    const handleTarget = () => onSelectTarget(string.sourceNote ?? string.note);
 
-    item.addEventListener("click", (event) => {
-      if (event.target instanceof HTMLElement && event.target.classList.contains("string-target-btn")) {
-        event.stopPropagation();
-        onSelectTarget(string.sourceNote ?? string.note);
-        return;
-      }
-      onPlay(string);
-    });
-
-    item.addEventListener("keydown", (event) => {
-      if (
-        event.target instanceof HTMLElement &&
-        event.target.classList.contains("string-target-btn")
-      ) {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onSelectTarget(string.sourceNote ?? string.note);
-        }
-        return;
-      }
-
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        onPlay(string);
-      }
+    playButton.addEventListener("click", handlePlay);
+    playButton.addEventListener("keydown", (event) => {
       if (event.key.toLowerCase() === "t") {
         event.preventDefault();
-        onSelectTarget(string.sourceNote ?? string.note);
+        handleTarget();
       }
     });
 
+    targetButton.addEventListener("click", handleTarget);
+
+    item.append(playButton, targetButton);
     stringsList.appendChild(item);
   });
 }
