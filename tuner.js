@@ -1,3 +1,10 @@
+import {
+  announcePitchDisplay,
+  appendPitchHistory,
+  clearPitchHistory,
+  drawPitchHistory,
+  openDialogWithFallback,
+} from "./controller-ui.js";
 import { analyzePitch, getAudioMediaStream } from "./audio.js";
 import {
   BUFFER_SIZE,
@@ -78,8 +85,10 @@ const dom = {
   clarityDisplay: document.getElementById("clarity-display"),
   needle: document.getElementById("needle"),
   tunerStatus: document.getElementById("tuner-status"),
+  tunerAnnouncer: document.getElementById("tuner-announcer"),
   stringsList: document.getElementById("strings-list"),
   tunerMeter: document.getElementById("tuner-meter"),
+  historyCanvas: document.getElementById("history-canvas"),
   modeSelect: document.getElementById("mode-select"),
   noiseGateSlider: document.getElementById("noise-gate-slider"),
   noiseGateValue: document.getElementById("noise-gate-value"),
@@ -113,6 +122,7 @@ const state = {
   wasInTune: false,
   setupStatusTimer: null,
   hasPlayedPreview: false,
+  pitchHistory: [],
   micPermissionState: "idle",
   engineState: {
     smoothedFrequency: null,
@@ -196,6 +206,28 @@ function updateDerivedControls() {
   }
 
   applyNeedleTransition(document.documentElement, getNeedleTransitionMs(state.reactivity));
+}
+
+function renderPitchHistory() {
+  drawPitchHistory(dom.historyCanvas, state.pitchHistory);
+}
+
+function resetPitchHistory() {
+  clearPitchHistory(state.pitchHistory);
+  renderPitchHistory();
+}
+
+function updateAnnouncer(display = null, { preserve = false } = {}) {
+  if (!dom.tunerAnnouncer) return;
+
+  if (!display) {
+    if (!preserve) {
+      dom.tunerAnnouncer.textContent = "";
+    }
+    return;
+  }
+
+  announcePitchDisplay(dom.tunerAnnouncer, display, { targetMode: state.targetMode });
 }
 
 function setSetupStatus(message = "", tone = "success", timeoutMs = DEFAULT_SETUP_STATUS_MS) {
@@ -417,6 +449,8 @@ function resetDisplay(message = "Waiting for sound...") {
     lockedTargetNote: null,
   };
   state.wasInTune = false;
+  resetPitchHistory();
+  updateAnnouncer();
   resetVisualState({ ...dom });
   renderStatusMessage(dom, message, state.isRunning ? "listening" : "idle");
   highlightActiveString(dom.stringsList, null, state.targetMode === "target" ? state.targetString : null);
@@ -582,15 +616,20 @@ function handlePitchResult(result, timestamp) {
   if (!nextState.display) {
     state.wasInTune = false;
     if (hadStableDisplay && timestamp - nextState.lastStableTime <= PITCH_HOLD_MS) {
+      updateAnnouncer(nextState.display, { preserve: true });
       renderStatusMessage(dom, "Holding last stable pitch...", "listening");
       return;
     }
+    updateAnnouncer();
     renderStatusMessage(dom, "Signal too weak or unclear — play a single string louder.", "warning");
     highlightActiveString(dom.stringsList, null, state.targetMode === "target" ? state.targetString : null);
     return;
   }
 
+  appendPitchHistory(state.pitchHistory, nextState.display.cents);
+  renderPitchHistory();
   renderPitchDisplay(dom, nextState.display, { targetMode: state.targetMode });
+  updateAnnouncer(nextState.display);
   highlightActiveString(
     dom.stringsList,
     nextState.display.activeMidi,
@@ -667,6 +706,7 @@ async function startTuner() {
     state.micPermissionState =
       error.name === "NotAllowedError" || error.name === "SecurityError" ? "denied" : "idle";
     updateOnboardingUi();
+    updateAnnouncer();
     if (error.name === "InsecureContextError") {
       renderStatusMessage(dom, "Use HTTPS or localhost to enable the microphone.", "error");
       setErrorHelp("Browsers only allow microphone access on secure origins. Try localhost or an HTTPS URL.");
@@ -684,7 +724,6 @@ async function startTuner() {
       setErrorHelp("If the problem continues, reload the page and verify that your microphone is available.");
     }
     setHintVisible(false);
-    console.error(error);
   }
 }
 
@@ -714,9 +753,10 @@ function openTuningsDialog() {
   hydrateBaseTuningOptions();
   renderCustomTuningsDialog();
   setNewTuningError("");
-  if (dom.tuningsDialog?.showModal) {
-    dom.tuningsDialog.showModal();
-  }
+  openDialogWithFallback(dom.tuningsDialog, {
+    setStatus: setSetupStatus,
+    fallbackMessage: "Custom tunings require a browser with dialog support.",
+  });
 }
 
 function bindEvents() {
@@ -876,10 +916,16 @@ function bindEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
     const target = event.target;
-    if (target && target !== dom.startBtn && target !== document.body) {
-      const tag = target.tagName;
-      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || target.isContentEditable) {
+    if (target instanceof HTMLElement) {
+      if (target.matches(".string-play-btn, .string-target-btn")) {
         return;
+      }
+
+      if (target !== dom.startBtn && target !== document.body) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || target.isContentEditable) {
+          return;
+        }
       }
     }
 
@@ -900,7 +946,7 @@ function bindEvents() {
 
     if (/^[1-9]$/.test(event.key)) {
       const idx = Number(event.key) - 1;
-      const buttons = dom.stringsList.querySelectorAll(".note-button");
+      const buttons = dom.stringsList.querySelectorAll(".string-play-btn");
       if (idx < buttons.length) {
         buttons[idx].click();
         event.preventDefault();
@@ -922,6 +968,7 @@ function bindEvents() {
   updateDerivedControls();
   applyTheme(getPreferredTheme());
   rebuildInstrumentStrings();
+  renderPitchHistory();
   bindEvents();
   updateOnboardingUi();
   setHintVisible(true);

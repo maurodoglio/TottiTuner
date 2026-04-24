@@ -325,12 +325,39 @@ describe("renderStringsList interactions", () => {
     });
   });
 
-  it("plays a preview when the list item is activated with Enter", () => {
-    const item = stringsList.querySelector(".note-button");
-    item.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  it("renders dedicated play buttons instead of making the whole row interactive", () => {
+    const item = stringsList.querySelector("li");
+    const playButton = stringsList.querySelector(".string-play-btn");
+    const targetButton = stringsList.querySelector(".string-target-btn");
+
+    expect(item?.getAttribute("role")).toBeNull();
+    expect(item?.tabIndex ?? -1).toBe(-1);
+    expect(playButton?.tagName).toBe("BUTTON");
+    expect(targetButton?.tagName).toBe("BUTTON");
+  });
+
+  it("plays a preview when the play button is clicked", () => {
+    const playButton = stringsList.querySelector(".string-play-btn");
+    playButton.click();
 
     expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ note: "A2" }));
     expect(onSelectTarget).not.toHaveBeenCalled();
+  });
+
+  it("does not manually duplicate native Enter handling on the play button", () => {
+    const playButton = stringsList.querySelector(".string-play-btn");
+    playButton.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    expect(onPlay).not.toHaveBeenCalled();
+    expect(onSelectTarget).not.toHaveBeenCalled();
+  });
+
+  it("supports the keyboard target shortcut on the play button", () => {
+    const playButton = stringsList.querySelector(".string-play-btn");
+    playButton.dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true }));
+
+    expect(onSelectTarget).toHaveBeenCalledWith("A2");
+    expect(onPlay).not.toHaveBeenCalled();
   });
 
   it("selects the target without playing a preview when the target button is clicked", () => {
@@ -341,11 +368,11 @@ describe("renderStringsList interactions", () => {
     expect(onPlay).not.toHaveBeenCalled();
   });
 
-  it("selects the target without playing a preview when the target button is activated by keyboard", () => {
+  it("does not manually duplicate native Enter handling on the target button", () => {
     const button = stringsList.querySelector(".string-target-btn");
     button.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 
-    expect(onSelectTarget).toHaveBeenCalledWith("A2");
+    expect(onSelectTarget).not.toHaveBeenCalled();
     expect(onPlay).not.toHaveBeenCalled();
   });
 
